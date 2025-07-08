@@ -5,10 +5,10 @@ data/uploads/*
 !data/uploads/README.md
 website/siteconfig.json
 website/node_modules/*
-website/package-lock.json
 website/__pycache__/*
 website/config.js
 /node_modules/
 node_modules
 .vscode
 website/dist
+website/venv

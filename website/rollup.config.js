@@ -4,7 +4,8 @@ import { registerPreprocessor } from '@riotjs/compiler'
 import sass from 'sass'
 import postcss from "rollup-plugin-postcss"
 import url from "postcss-url"
-const path = require('path')
+import * as path from 'path'
+
 
 /*
   NOTE: rollup compiles the regular interface, consisting of the riotjs files.

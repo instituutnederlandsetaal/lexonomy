@@ -11,27 +11,33 @@
             <button type="button" class="btn btn-small red lighten-1" title="Remove {element.name} from subentries" style="margin-right: 15px;" onclick={ doDeleteEl }><i class="material-symbols-outlined">delete</i></button>
          </div>
 
-
          <span class="helper-text">(Optional) - Attributes this element should have to be a subentry: </span>
 
          <div each={att in element.activeAttributes} data-attribute={att.name} class="att">
             <label for={`${att.name}-value`} class="name blue-text">@{att.name}</label>
-
             <select if={att.values} class="value" onchange={changeAttribute} value={att.value} name={`${att.name}-value`}>
                <option value="" selected={!att.value}>[any value]</option>
                <option each={v in att.values} value={v.value} selected={v.value === att.value}>{v.value}</option>
             </select>
             <input if={!att.values} type="text" class="value" value={att.value} onchange={changeAttribute} placeholder="Value">
-
             <button type="button" class="btn btn-small red lighten-1" title="Remove {att.name} from required attributes" onclick={deleteAttribute}><i class="material-symbols-outlined">delete</i></button>
          </div>
 
          <div if={element.inactiveAttributes.length} class="att-new">
-            
             <select class="name new-attribute" name="new-attribute">
                <option each={att in element.inactiveAttributes} value={att.name}>{att.name}</option>
             </select>
             <button class="btn btn-small" type="button" onclick={addAttribute} title="Add required subentry attribute"><i class="material-symbols-outlined">add</i></button>
+         </div>
+
+         <!-- Headword element selection for subentry titling -->
+         <div class="att-new" if={getSubentryDescendants(element.name).length}>
+            <label for={`headword-${element.name}`} class="name">Headword element</label>
+            <select class="value" name={`headword-${element.name}`} onchange={e => setSubentryHeadword(element.name, e.target.value)}>
+               <option value="" selected={!getSubentryHeadword(element.name)}>(not set)</option>
+               <option each={desc in getSubentryDescendants(element.name)} value={desc.id} selected={getSubentryHeadword(element.name) === desc.id}>{desc.displayName}</option>
+            </select>
+            <span class="helper-text">Select which descendant element of <b>{element.name}</b> should be used as the headword/title for subentries of this type.</span>
          </div>
       </div>
 
@@ -221,9 +227,33 @@
             this.store
                .updateDictionaryConfig("subbing", this.configData)
                .always(() => this.update({isSaving: false}))
-         }
+         },
+
+         getSubentryDescendants(elementName) {
+            // Returns array of {id, displayName} for all descendants (including children, grandchildren, etc) of this subentry element
+            const xema = this.xema;
+            if (!xema?.elements?.[elementName]) return [];
+            const seen = new Set();
+            const descendants = [];
+            const visit = elId => {
+               if (!xema.elements[elId] || seen.has(elId)) return;
+               seen.add(elId);
+               const elConfig = xema.elements[elId];
+               descendants.push({ id: elId, displayName: elConfig.elementName || elId });
+               elConfig.children?.forEach(child => visit(child.name));
+            };
+            xema.elements[elementName].children?.forEach(child => visit(child.name));
+            return descendants;
+         },
+         getSubentryHeadword(elementName) {
+            return this.configData[elementName]?.titling?.headword || '';
+         },
+         setSubentryHeadword(elementName, value) {
+            if (!this.configData[elementName].titling) this.configData[elementName].titling = {};
+            this.configData[elementName].titling.headword = value;
+            this.update();
+         },
       }
    </script>
 
 </dict-config-subbing>
-

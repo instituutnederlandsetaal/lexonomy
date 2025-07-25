@@ -128,11 +128,21 @@ class ConfigXema(TypedDict):
 
 # Keys are duplicated in the entry, using the linkElement property: so { "entry": {"linkElement": "entry", ...etc} }
 ConfigLinks = dict[str, ConfigLinksEntry]
-class ConfigSubbingEntry(TypedDict):
-    attributes: NotRequired[dict[str, str]]
+
+class ConfigSubentryTitling(TypedDict):
+    headword: str
+    """ID of the (xema) element to use as headword/title for the subentry.
+    We will fall back to using the first text content in the entry if not supplied.
+    """
+
+class ConfigSubbingEntry(TypedDict, total=False):
+    attributes: dict[str, str]
     """A dictionary containing: { [name of attribute]: "required value of attribute" } (if empty value - only presence of attribute is checked, any value is accepted)
         The attributes property is NotRequired because this setting didn't always exist, and so it won't be there in old configs.
     """
+    titling: Optional[ConfigSubentryTitling]
+    """Titling configuration for the subentry."""
+    
 
 ConfigSubbing = dict[str, ConfigSubbingEntry] # values are empty dicts for now
 
@@ -759,7 +769,7 @@ def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int],
             if tag:
                 ret["tag"] = parsedXml
             if titlePlain:
-                ret["titlePlain"] = get_entry_title(parsedXml, configs)[0]
+                ret["titlePlain"] = get_entry_title(parsedXml, configs, xema_element_id=xema_get_id_from_element_name(configs["xema"], row["doctype"]))[0]
         if html:
             ret["html"] = get_entry_html(dictDB, configs, row["xml"], run_xslt)
         entries.append(ret)
@@ -800,7 +810,7 @@ def get_entry_id(xml: Tag, dictDB: Connection, maybeID: Optional[int] = None) ->
         xml.attrs["lxnm:id"] = str(maybeID)
         id = None
 
-    id = xml.attrs.get('lxnm:id') # check if xml has an id, if not, create one. (entryID is legacy)
+    id = xml.attrs.get('lxnm:id') # check if xml has an id, if not, create one.
     if id is None:
         id = xml.attrs.get('lxnm:entryID') # id used to be stored in lxnm:entryID once upon a time: legacy support
     if id is not None:
@@ -868,7 +878,7 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
     """
 
     config = configs["subbing"]
-    def turnChildElementIntoSubentry(parentEntry: Tag, subentry: Tag) -> int:
+    def turnChildElementIntoSubentry(parentEntry: Tag, subentry: Tag, xema_element_id: str) -> int:
         """
             Save the child in the database, giving it an ID automatically.
             Then in the parent, replace the child xml with <lxnm:subentryParent id=${childID}/> and store the link between parent and child in the sub database.
@@ -876,8 +886,8 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
         """
         subentryID, subentryXml, _, _ = createEntry(dictDB, configs, subentry, email)
         if subentryXml:
-            subentryTitlePlain = get_entry_title(subentryXml, configs)[0]
             subentryDoctype = get_entry_doctype(subentryXml)
+            subentryTitlePlain = get_entry_title(subentryXml, configs, xema_element_id=xema_element_id)[0]
             new_tag = BeautifulSoup().new_tag("lxnm:subentryParent", attrs={
                 "id": str(subentryID),
                 "title": subentryTitlePlain,
@@ -895,16 +905,16 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
         return False
 
     # 1. Replace subentries with <subentryParent> placeholder/standin elements
-    # NOTE: gather first - then replace, as to avoid modifying the xml while we're iterating and throwing off BeatifulSoup
-    nodesToTurnIntoSubentries: List[Tag] = []
+    # NOTE: gather first - then replace, as to avoid modifying the xml while we're iterating and throwing off BeautifulSoup
+    nodesToTurnIntoSubentries: List[Tuple[Tag, str]] = []
     newSubentries: List[int] = []
-    for element_id in config:
-        element_name = xema_get_element_name_from_id(configs["xema"], element_id)
+    for xema_element_id in config:
+        element_name = xema_get_element_name_from_id(configs["xema"], xema_element_id)
         for subentryElement in entryXml.select(element_name):
-            if not isInsideOtherSubentry(subentryElement) and is_subentry(config, subentryElement, element_id):
-                nodesToTurnIntoSubentries.append(subentryElement)
-    for subentryElement in nodesToTurnIntoSubentries:
-        subentryID = turnChildElementIntoSubentry(entryXml, subentryElement)
+            if not isInsideOtherSubentry(subentryElement) and is_subentry(config, subentryElement, xema_element_id):
+                nodesToTurnIntoSubentries.append((subentryElement, xema_element_id))
+    for subentryElement, xema_element_id in nodesToTurnIntoSubentries:
+        subentryID = turnChildElementIntoSubentry(entryXml, subentryElement, xema_element_id)
         newSubentries.append(subentryID)
 
     # 2. Gather all subentry IDs for this entry, excluding ones we just created (those are guaranteed to be valid)
@@ -928,10 +938,11 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
                 subentryXml = parse(r["xml"])
 
             subentryID = int(r["id"])
-            isValid = is_subentry(config, subentryXml, xema_get_id_from_element_name(configs["xema"], r["doctype"]))
+            xema_element_id = xema_get_id_from_element_name(configs["xema"], r["doctype"])
+            isValid = is_subentry(config, subentryXml, xema_element_id)
             if isValid: # this <lxnm:subentryParent> may stay, but update its attributes anyway while we're here, so we're sure they are up to date.
                 for subentry in entryXml.findAll("lxnm:subentryParent", {"id": subentryID}): # and place xml content in the parent entry
-                    subentry.attrs["title"] = get_entry_title(subentryXml, configs)[0]
+                    subentry.attrs["title"] = get_entry_title(subentryXml, configs, xema_element_id=xema_element_id)[0]
                     subentry.attrs["doctype"] = r["doctype"]
                 subentryIdsToValidate.remove(subentryID) # mark this one done.
                 validSubentryIDs.add(subentryID)
@@ -1008,18 +1019,21 @@ def get_entry_headword(xml: Tag, configs: Configs) -> str:
     else:
         return DEFAULT_HEADWORD
 
-def get_entry_title(xml: Tag, configs: Configs) -> Tuple[str, str]:
+def get_entry_title(xml: Tag, configs: Configs, xema_element_id: str) -> Tuple[str, str]:
     """
     Returns [title as plaintext, title as html]
     This will usually be the headword (and optionally some other things), unless specifically configured by the user (by using advanced mode).
-
-    The title is used in two places:
-    - as searchable (see presave_searchables) (the plaintext version).
-    - in the list of all entries in the editor in the frontend (the html version).
+    xema_element_id is required to know whether this element is a subtentry, and to retrieve the correct subentry config if it is. 
+    Since subentries have a different schema from the main entry, they may have a different headword element and thus a different title.
     """
-    # advanced process; do string-replacement in a format-string
-    # format string looks like "some text %(elementName) some more text maybe %(anotherElementName)"
-    # replace the %() sequences with the contents of the first (non-whitespace) element of the name.
+    # If this is a subentry and a titling config is present for this subentry type, use it
+    if xema_element_id and (headword_xema_id := configs["subbing"].get(xema_element_id, {}).get("titling", {}).get("headword")):
+        headword_element_name = xema_get_element_name_from_id(configs["xema"], headword_xema_id)
+        if headword_element_name and (val := get_text(xml, headword_element_name)):
+            headword = val[0:255]
+            return headword, f"<span class='headword'>{headword}</span>"
+    
+    # Fallback to main config
     config: ConfigTitling = configs["titling"]
     titleParts: List[str] = []
     if (formatString := config.get("headwordAnnotationsAdvanced", "")) and config.get("headwordAnnotationsType") == "advanced":
@@ -1137,6 +1151,8 @@ def set_entry_flag(dictDB: Connection, entryID: int, flag: str, configs: Configs
     elif isinstance(xml, str):
         xml = parse(xml)
 
+    root_element_id = xema_get_id_from_element_name(xema, xml.name)
+
     def updateFlag(entryRoot: Tag, the_flag_element: Tag):
         the_flag_element.clear()
         the_flag_element.append(flag) # add the string
@@ -1146,7 +1162,7 @@ def set_entry_flag(dictDB: Connection, entryID: int, flag: str, configs: Configs
 
         # if the user can search in the flag field (which we just modified), update the search table
         if flag_element_id in configs["searchability"].get("searchableElements", []):
-            titleText, titleHtml = get_entry_title(entryRoot, configs)
+            titleText, titleHtml = get_entry_title(entryRoot, configs, xema_element_id=root_element_id)
             presave_searchables(dictDB, configs, entryRoot, entryID, titleText)
 
     # Note, we do not check the path to the flag element here.
@@ -1158,7 +1174,6 @@ def set_entry_flag(dictDB: Connection, entryID: int, flag: str, configs: Configs
     # flag not present. try and find where we should insert it, and do so.
     # Start looking from the actual entry root instead of schema root,
     # as it is possible this entry does not start at the schema root (such as when this is a subentry).
-    root_element_id = xema_get_id_from_element_name(xema, xml.name)
     path_to_flag = find_path_to_element(xema, root_element_id, flag_element_id) or [flag_element_name] # if we can't find a path, add the flag directly below the root.
     flag_element = create_path_to_element(xml, path_to_flag)
     updateFlag(xml, flag_element)
@@ -1423,7 +1438,7 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
     presave_subentries(dictDB, configs, xml, id, email)
 
     doctype = get_entry_doctype(xml)
-    titleText, titleHtml = get_entry_title(xml, configs)
+    titleText, titleHtml = get_entry_title(xml, configs, xema_get_id_from_element_name(configs["xema"], doctype))
     sortKey = get_entry_sortkey(xml, configs)
     flag = get_entry_flag(xml, configs)
 
@@ -2451,15 +2466,15 @@ def _getProcessStatus(pidfile: str, errfile: str) -> ExternalProcessStatus:
 
     progress = 'Import started. Please wait...'
     errors = os.path.isfile(errfile) and os.stat(errfile).st_size > 0
-        with open(pidfile, "r") as content_file:
+    with open(pidfile, "r") as content_file:
         lines = [line.strip() for line in content_file if line.strip()]
         if lines:
             progress = lines[-1]
 
     finished = "100%" in progress
     if finished:
-            os.unlink(pidfile)
-            os.unlink(errfile)
+        os.unlink(pidfile)
+        os.unlink(errfile)
     
     return {"progressMessage": progress, "finished": finished, "errors": errors}
 

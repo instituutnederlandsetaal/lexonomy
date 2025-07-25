@@ -103,8 +103,8 @@ def migrate_2(dictDB: Connection, configs: Configs):
             subentryID = int(subentryRef.attrs["id"])
             subentry = dictDB.execute("select * from entries where id=?", (subentryID, )).fetchone()
             subentryXml = ops.parse(subentry["xml"])
-            subentryRef.attrs["title"] = ops.get_entry_title(subentryXml, configs)
             subentryRef.attrs["doctype"] = ops.get_entry_doctype(subentryXml)
+            subentryRef.attrs["title"] = ops.get_entry_title(subentryXml, configs, xema_element_id=ops.xema_get_id_from_element_name(configs["xema"], subentryRef.attrs["doctype"]))[0]
 
         ops.createEntry(dictDB, configs, entryXml["xml"], "system@lexonomy", entryXml["id"])
 

@@ -1,9 +1,10 @@
-node_modules
+**/node_modules
 npm-debug.log
-Dockerfile*
-docker-compose*
+**/Dockerfile*
+**/docker-compose*
 .dockerignore
-.git
+# .git is included because we retrieve the current git tag/commit hash during the build for version in the interface
 .gitignore
 README.md
 LICENSE
+data

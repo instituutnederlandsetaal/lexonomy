@@ -1,10 +1,16 @@
-bottle==0.12.20
-lxml>=4.9.1
+bottle==0.13.0
+lxml==6.0.0
 Paste==3.0.8
-six==1.12.0
-Markdown>=3.1.0
-PyICU>=2.2
-requests
-beautifulsoup4>=4.4.0
-typing-extensions
-PyJWT
+six==1.17.0
+Markdown==3.8.2
+pyicu==2.15.2
+requests==2.32.4
+beautifulsoup4==4.13.4
+typing_extensions==4.14.1
+PyJWT==2.10.1
+
+# certifi==2025.6.15
+# charset-normalizer==3.4.2
+# idna==3.10
+# soupsieve==2.7
+# urllib3==2.5.0

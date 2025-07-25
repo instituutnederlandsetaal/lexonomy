@@ -1,12 +1,15 @@
-version: '3'
-
 services:
-    main:
-        build: .
-        image: lexonomy
+    lexonomy:
+        image: ${ORG:-elexis-eu}/lexonomy:${VER:-dev}
+        build:
+            context: .
+            args:
+                VER: ${VER:-dev}
         volumes:
-            - <path to siteconfig.json>:/opt/service/website/siteconfig.json
-            - <path to data directory>:/opt/service/data
+            - ./website/siteconfig.json.template:/opt/service/website/siteconfig.json
+            - ./website/config.js.template:/opt/service/website/config.js
+            - ./data:/opt/service/data
         ports:
             - "8000:8000"
+            - "5678:5678"  # Debug port
 

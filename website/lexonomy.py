@@ -57,7 +57,7 @@ if not cgi and len(sys.argv) > 1:
     my_url = sys.argv[1]
 
 # serve static files
-@route('/<path:re:(widgets|furniture|libs|index.*\.html|config\.js|img|js\/|css|docs|dist|version\.txt).*>')
+@route('/<path:re:(widgets|furniture|libs|index.*\\.html|config\\.js|img|js\\/|css|docs|dist|version\\.txt).*>')
 def server_static(path: str):
     return static_file(path, root="./")
 
@@ -695,14 +695,14 @@ def dictconfig(dictID: str):
         res = {"success": True, "doctype": configs["xema"]["root"], "doctypes": doctypes, "userAccess": user["dictAccess"]}
         return res
 
-@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\d+>/nabes.json")
+@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>/nabes.json")
 def publicentrynabes(dictID: str, entryID: int):
     dictDB = ops.getDB(dictID)
     user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, dictDB)
     nabes = ops.readNabesByEntryID(dictDB, dictID, entryID, configs)
     return {"nabes": nabes}
 
-@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\d+>.xml")
+@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>.xml")
 def publicentryxml(dictID: str, entryID: int):
     if not ops.dictExists(dictID):
         return redirect("/")
@@ -1122,7 +1122,7 @@ def publicdict(dictID):
     else:
         return redirect("/")
 
-@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\d+>")
+@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>")
 def publicentry(dictID, entryID):
     if ops.dictExists(dictID):
         return redirect("/#" + dictID + '/' + entryID)
@@ -1239,9 +1239,7 @@ def error404(error):
         return redirect("/#/e404")
 
 # deployment
-debug=False
-if "DEBUG" in os.environ:
-    debug=True
+debug="DEBUG" in os.environ
 if ":" in my_url:
     host, port = my_url.split(":")
 elif siteconfig.get("port") and siteconfig["port"] > 0:

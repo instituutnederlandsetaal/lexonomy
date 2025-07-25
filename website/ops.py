@@ -345,7 +345,7 @@ defaultDictConfig = {
     }
 }
 
-prohibitedDictIDs = ["login", "logout", "make", "signup", "forgotpwd", "changepwd", "users", "dicts", "oneclick", "recoverpwd", "createaccount", "consent", "userprofile", "dictionaries", "about", "list", "lemma", "json", "ontolex", "tei"];
+prohibitedDictIDs = ["login", "logout", "make", "signup", "forgotpwd", "changepwd", "users", "dicts", "oneclick", "recoverpwd", "createaccount", "consent", "userprofile", "dictionaries", "about", "list", "lemma", "json", "ontolex", "tei", ""]
 
 # db management
 def getDB(dictID: str) -> Connection:
@@ -1434,7 +1434,7 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
     # Create/update the entry, save history
     xmlstr = str(xml)
     doSql(dictDB, "update entries set doctype=?, xml=?, title=?, sortkey=?, flag=?, needs_update=0 where id=?", (doctype, xmlstr, titleHtml, sortKey, flag, id))
-    doSql(dictDB, "insert into history(entry_id, action, [when], email, xml, historiography) values(?, ?, ?, ?, ?, ?)", (id, "create" if isNewEntry else "update", str(datetime.datetime.utcnow()), email, xmlstr, json.dumps({})))
+    doSql(dictDB, "insert into history(entry_id, action, [when], email, xml, historiography) values(?, ?, ?, ?, ?, ?)", (id, "create" if isNewEntry else "update", str(datetime.datetime.now(datetime.timezone.utc)), email, xmlstr, json.dumps({})))
 
     # Report if headword exists.
     c = dictDB.execute("select id from entries where title = ? and id <> ?", (titleText, id))
@@ -1775,7 +1775,7 @@ def getDoc(docID: str):
         html = markdown.markdown(open(path).read())
         title = re.search('<h1>([^<]*)</h1>', html)
         if title:
-            doc["title"] = re.sub('<\/?h1>','', title.group(0))
+            doc["title"] = re.sub('<\\/?h1>','', title.group(0))
         doc["html"] = html
         return doc
     else:
@@ -2932,7 +2932,7 @@ def listOntolexEntries(dictDB: Connection, dictID: str, configs: Configs, doctyp
         headword = get_entry_headword(xml, configs)
         headword = headword.replace('"', "'")
         lang = configs["ident"].get("lang", "") or "en"
-        entryId = re.sub("[\W_]", "",  headword) + "_" + str(r["id"])
+        entryId = re.sub("[\\W_]", "",  headword) + "_" + str(r["id"])
         line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/lemon/ontolex#LexicalEntry> ."
         yield line; yield "\n"
         line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/2000/01/rdf-schema#label> \"" + headword + "\"@" + lang + " ."

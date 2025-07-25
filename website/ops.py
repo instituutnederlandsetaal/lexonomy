@@ -2394,7 +2394,14 @@ def _startSubprocess(subProcessID: str, scriptPath: str, args: list[str]) -> Ext
 
     args = [sys.executable, scriptPath] + args # prepend executable.
     p = subprocess.Popen(args, stdout=pidfile_f, stderr=errfile_f, start_new_session=True, close_fds=True)
-    return _getProcessStatus(pidfile, errfile)
+    # We can close these now, child process has a copy of the file descriptors.
+    pidfile_f.close()
+    errfile_f.close()
+    return {
+        "errors": False,
+        "finished": False,
+        "progressMessage": "Started. Please wait..."
+    }
 
 def _getProcessStatus(pidfile: str, errfile: str) -> ExternalProcessStatus:
     """read the pidfile and errfile and return the status of the proces.
@@ -2411,26 +2418,18 @@ def _getProcessStatus(pidfile: str, errfile: str) -> ExternalProcessStatus:
             "progressMessage": "Finished",
         }
 
-    content = ''
-    while content == '':
+    progress = 'Import started. Please wait...'
+    errors = os.path.isfile(errfile) and os.stat(errfile).st_size > 0
         with open(pidfile, "r") as content_file:
-            content = content_file.read()
-    pid_data = re.split(r"[\n\r]", content)
-    finished = False
-    if len(pid_data) > 1:
-        if pid_data[-1] == "":
-            progress = pid_data[-2]
-        else:
-            progress = pid_data[-1]
-        if "100%" in progress:
-            finished = True
+        lines = [line.strip() for line in content_file if line.strip()]
+        if lines:
+            progress = lines[-1]
+
+    finished = "100%" in progress
+    if finished:
             os.unlink(pidfile)
             os.unlink(errfile)
-    else:
-        progress = "Import started. Please wait..."
-    errors = False
-    if os.path.isfile(errfile) and os.stat(errfile).st_size:
-        errors = True
+    
     return {"progressMessage": progress, "finished": finished, "errors": errors}
 
 def readDoctypesUsed(dictDB: Connection):

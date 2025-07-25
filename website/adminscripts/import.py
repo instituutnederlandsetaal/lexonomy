@@ -29,8 +29,8 @@ parser.add_argument("file", help="Path to file_to_import.xml")
 args = parser.parse_args()
 
 
-print("PID "+ str(os.getpid()))
-print("Import started. Please wait...")
+print("PID "+ str(os.getpid()), flush=True)
+print("Import started. Please wait...", flush=True)
 
 dictID = os.path.basename(args.database).replace(".sqlite", "")
 db = sqlite3.connect(args.database, )
@@ -40,25 +40,28 @@ db.execute('PRAGMA synchronous = 0')
 db.execute("PRAGMA cache_size = -100000") # about 100 megs
 db.execute("begin")
 
-historiography={"importStart": str(datetime.datetime.utcnow()), "filename": os.path.basename(args.file)}
+historiography: dict[str, str] = {
+    "importStart": str(datetime.datetime.now(datetime.timezone.utc)),
+    "filename": os.path.basename(args.file)
+}
 
 if args.purge or args.purge_history:
     if args.purge_history: 
-        print("Purging history...")
+        print("Purging history...", flush=True)
         db.execute("delete from history")
     else:
-        print("Copying all entries to history...")
+        print("Copying all entries to history...", flush=True)
         db.execute("insert into history(entry_id, action, [when], email, xml, historiography) select id, 'purge', ?, ?, xml, ? from entries", (str(datetime.datetime.utcnow()), args.user, json.dumps(historiography)))
 
     # first delete from all related tables before deleting entries themselves - immense speadup due to faster constraint checking.
-    print("Purging entries...")
+    print("Purging entries...", flush=True)
     db.execute("delete from sub")
     db.execute("delete from searchables")
     db.execute("delete from linkables")
     db.execute("delete from sub")
     db.execute("delete from entries")
     db.commit()
-    print("Compressing database...")
+    print("Compressing database...", flush=True)
     db.execute("vacuum")
     db.commit()
 
@@ -72,7 +75,7 @@ rootTag: str = "" # unused apart from entry tag detection code
 xmldata: bytes = open(args.file, 'rb').read() # NOTE: do not decode into string, otherwise we cannot extract the entries because byte and char offsets will mismatch. What I think happens is  sax returns byte offsets, while if we decode into string here, slices on this string will interpret indices as char offsets.
 
 if entryTag:
-    print("Entry tag from xema: " + entryTag)
+    print("Entry tag from xema: " + entryTag, flush=True)
 
 # If there is no document structure defined (the xema is empty?) 
 # Then assume the dictionary looks like this, so detect the first child of the root, and set that as entryTag
@@ -100,7 +103,7 @@ if not entryTag:
 
     # Remove leading declarations. (NOTE: ported from old code - why do we do this? does SAX report these as elements and we think they're the entry?)
     # Regex works on byte arrays, but all arguments must be bytes.
-    xmldata = re.sub('<\?xml[^?]*\?>'.encode('utf-8'), b'', xmldata)
+    xmldata = re.sub('<\\?xml[^?]*\\?>'.encode('utf-8'), b'', xmldata)
     xmldata = re.sub('<!DOCTYPE[^>]*>'.encode('utf-8'), b'', xmldata)
     try:
         saxParser = xml.sax.parseString(xmldata, handlerFirst())
@@ -113,12 +116,12 @@ if not entryTag:
             saxParser = xml.sax.parseString(xmldata, handlerFirst()) # if this errors too, just throw
         else:
             if entryTag == "":
-                print("Not possible to detect element name for entry, please fix errors:")
-                print(e, file=sys.stderr)
+                print("Not possible to detect element name for entry, please fix errors:", flush=True)
+                print(e, file=sys.stderr, flush=True)
                 sys.exit()
 
 if not entryTag:
-    print("Not possible to detect element name for entry, define a xema in the database, or fix errors in xml file")
+    print("Not possible to detect element name for entry, define a xema in the database, or fix errors in xml file", flush=True)
     sys.exit()
 
 p = ParserCreate("utf-8")
@@ -153,7 +156,7 @@ def indexEntry():
 
         percent = int(addedUntil / totalData * 100)
         if ((entriesImported % 100) == 0):
-            print(f"{percent}% - {entriesImported} entries imported so far...")
+            print(f"{percent}% - {entriesImported} entries imported so far...", flush=True)
 
 def indexInBetween():
     global p
@@ -218,5 +221,5 @@ p.Parse(xmldata)
 # finished
 db.commit()
 db.close()
-print(f"100% - {entriesImported} total entries imported.")
+print(f"100% - {entriesImported} total entries imported.", flush=True)
 exit()

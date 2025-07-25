@@ -234,7 +234,7 @@ class StoreClass {
       this.data.isDictionaryLoading = true
       this.data.isDictionaryLoaded = false
       this.trigger("isDictionaryLoadingChanged")
-      this.loadDictionary(this.data.dictId)
+      return this.loadDictionary(this.data.dictId)
             .done(response => {
                if(response.success){
                   Object.assign(this.data, {
@@ -254,7 +254,7 @@ class StoreClass {
                   this.data.isDictionaryLoaded = true
                   this.data.isDictionaryLoading = false
                   this.trigger("dictionaryChanged")
-                  this.loadEntryList()
+                  return this.loadEntryList()
                } else {
                   this.data.isDictionaryLoading = false
                   route("#/")
@@ -382,8 +382,8 @@ class StoreClass {
          }
       })
             .done(response => {
-               this.loadActualDictionary()
                M.toast({html: "Saved"})
+               return this.loadActualDictionary()
             })
             .fail(response => {
                M.toast({html: `Could not save the data ('${configId}'): ${response.statusText}`})

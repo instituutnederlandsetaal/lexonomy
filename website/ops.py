@@ -1728,7 +1728,12 @@ def attachDict(dictDB: Connection, dictID: str):
 
 def cloneDict(dictID: str, email: str):
     newID = suggestDictId()
-    shutil.copy(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite"), os.path.join(siteconfig["dataDir"], "dicts", newID + ".sqlite"))
+    for ext in [".sqlite", ".sqlite-wal", ".sqlite-shm"]:
+        old_file = os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ext)
+        new_file = os.path.join(siteconfig["dataDir"], "dicts", newID + ext)
+        if os.path.exists(old_file):
+            shutil.copy(old_file, new_file)
+
     newDB = getDB(newID)
     res = newDB.execute("select json from configs where id='ident'")
     row = res.fetchone()
@@ -1754,18 +1759,44 @@ def destroyDict(dictID: str):
     return True
 
 def moveDict(oldID: str, newID: str):
-    if newID in prohibitedDictIDs or dictExists(newID):
+    # Only allow IDs with word, space, underscore, or dash characters (including non-western letters)
+    if not re.match(r'^[\w\s\-]+$', newID, re.UNICODE) or newID in prohibitedDictIDs or dictExists(newID):
+        print(f"moveDict: Cannot move dict: '{newID}' contains invalid characters, already exists, or is prohibited.")
         return False
-    shutil.move(os.path.join(siteconfig["dataDir"], "dicts/" + oldID + ".sqlite"), os.path.join(siteconfig["dataDir"], "dicts/" + newID + ".sqlite"))
-    if os.path.exists(os.path.join(siteconfig["dataDir"], "dicts/" + oldID + ".sqlite-wal")):
-        os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + oldID + ".sqlite-wal"))
-    if os.path.exists(os.path.join(siteconfig["dataDir"], "dicts/" + oldID + ".sqlite-shm")):
-        os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + oldID + ".sqlite-shm"))
-    conn = getMainDB()
-    conn.execute("delete from dicts where id=?", (oldID,))
-    conn.commit()
-    dictDB = getDB(newID)
-    attachDict(dictDB, newID)
+    
+    # Perform an operation that will fail if the database is in use, to ensure it is not locked.
+    # Performing a checkpoint also nicely reduces the size of the (sometimes quite large) WAL file.
+    try:
+        db = getDB(oldID)
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.close()
+    except Exception:
+        print(f"moveDict: Failed to close database connection for {oldID}. It may not be open or in use.")
+        return False
+    
+    import shutil
+
+    # NOTE: USE COPY + DELETE, DO NOT USE MOVE/RENAME
+    # There is an issue with bind mounts in docker where using os.rename() or shutil.move() causes a strange state
+    # where the file is moved on the host, but the container still sees the old file.
+    # The only way to reliably move files in this case seems to be to copy them and then delete the old ones.
+    dicts_dir = os.path.abspath(os.path.join(siteconfig["dataDir"], "dicts"))
+    files = [
+        (os.path.join(dicts_dir, oldID + ext), 
+        os.path.join(dicts_dir, newID + ext)) 
+        for ext in [".sqlite", ".sqlite-wal", ".sqlite-shm"]]
+    for old_file, new_file in files:
+        if os.path.exists(old_file):
+            try:
+                shutil.copy2(old_file, new_file)
+            except Exception as e:
+                print(f"moveDict: Failed to copy {old_file} to {new_file}: {e}")
+                return False
+
+    # Attach the new dict and destroy the old one
+    attachDict(getDB(newID), newID)
+    destroyDict(oldID)
+    
     return True
 
 def getDoc(docID: str):

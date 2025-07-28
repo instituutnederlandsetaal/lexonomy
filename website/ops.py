@@ -326,6 +326,8 @@ class User(TypedDict):
     email: str
     ske_username: Optional[str]
     ske_apiKey: Optional[str]
+    apiKey: Optional[str]
+    """Lexonomy Api key for your user, so other applications can access your data in Lexonomy."""
     loggedin: bool
 
 currdir = os.path.dirname(os.path.abspath(__file__))
@@ -435,7 +437,12 @@ def verifyLoginAndDictAccess(email: str, sessionkey: str, dictDB: Connection):
     configs = readDictConfigs(dictDB)
     dictAccess = configs["users"].get(email)
     if ret["loggedin"] == False or (not dictAccess and not ret["isAdmin"]):
-        return {"loggedin": ret["loggedin"], "email": email, "dictAccess": False, "isAdmin": False}, configs
+        return ({
+            "loggedin": ret["loggedin"], 
+            "email": email, 
+            "dictAccess": False, 
+            "isAdmin": False
+        }, configs)
     ret["dictAccess"] = dictAccess or {}
     for r in ["canEdit", "canConfig", "canDownload", "canUpload"]:
         ret[r] = ret.get("isAdmin") or (dictAccess and dictAccess[r])

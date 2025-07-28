@@ -8,8 +8,10 @@ services:
         volumes:
             - ./website/siteconfig.json.template:/opt/service/website/siteconfig.json
             - ./website/config.js.template:/opt/service/website/config.js
-            - ./data:/opt/service/data
+            - lexonomy_data:/opt/service/data
         ports:
             - "8000:8000"
             - "5678:5678"  # Debug port
+volumes:
+  lexonomy_data:
 

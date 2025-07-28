@@ -1,8 +1,10 @@
 #!/bin/sh
 
-NAME="lexonomy:latest"
+NAME="${NAME:-lexonomy:latest}"
 DATE="$(git log | head -n 3 | grep Date | cut -d ' ' -f '6,5,8' | tr ' ' .)"
-VERSION="$DATE:$(git rev-parse HEAD)"
+GIT_TAG=$(git describe --exact-match --tags 2>/dev/null || git rev-parse --short HEAD) && \
 
-docker build --build-arg VER="$VERSION" -t "$NAME" .
+
+VERSION="$DATE:$GIT_TAG"
+docker build --build-arg VER="$VERSION" -t "$NAME" ."
 

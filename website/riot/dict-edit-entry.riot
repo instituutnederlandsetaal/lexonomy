@@ -21,6 +21,7 @@
 
    <script>
       import {Xonomy as XonomyClass} from '@elexis-eu/xonomy';
+      import * as XonomyExports from '@elexis-eu/xonomy';
       import {parseDTD, struct2Xonomy, initialDocument} from '../libs/xonomy-tools/dtdconvert/dtd2xonomy'
 
       export default {
@@ -333,6 +334,7 @@
 
          onBeforeMount() {
             globalThis.Xonomy = new XonomyClass();
+            globalThis.XonomyExports = XonomyExports;
             Xonomy.buttonClass = 'btn';
          },
          onBeforeUnmount() {

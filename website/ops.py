@@ -364,7 +364,7 @@ def getDB(dictID: str) -> Connection:
     if os.path.isfile(os.path.join(siteconfig["dataDir"], "dicts", dictID+".sqlite")):
         conn = sqlite3.connect(os.path.join(siteconfig["dataDir"], "dicts", dictID+".sqlite"))
         conn.row_factory = sqlite3.Row
-        conn.executescript("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=on")
+        conn.executescript("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=on; PRAGMA busy_timeout = 5000;")
         return conn
     else:
         raise FileNotFoundError(f"Database for dictionary {dictID} not found")
@@ -372,6 +372,7 @@ def getDB(dictID: str) -> Connection:
 def getMainDB():
     conn = sqlite3.connect(os.path.join(siteconfig["dataDir"], 'lexonomy.sqlite'))
     conn.row_factory = sqlite3.Row
+    conn.executescript("PRAGMA busy_timeout = 5000;")
     return conn
 
 def getLinkDB():
@@ -417,20 +418,20 @@ def readDictConfigs(dictDB: Connection) -> Configs:
 
 # auth
 def verifyLogin(email: str, sessionkey: str):
-    conn = getMainDB()
-    now = datetime.datetime.utcnow()
-    yesterday = now - datetime.timedelta(days=1)
-    email = email.lower()
-    c = conn.execute("select email, ske_apiKey, ske_username, apiKey, consent from users where email=? and sessionKey=? and sessionLast>=?", (email, sessionkey, yesterday))
-    user = c.fetchone()
-    if not user:
-        return {"loggedin": False, "email": None}
-    conn.execute("update users set sessionLast=? where email=?", (now, email))
-    conn.commit()
-    ret = {"loggedin": True, "email": email, "isAdmin": email in siteconfig["admins"],
-           "ske_username": user["ske_username"], "ske_apiKey": user["ske_apiKey"],
-           "apiKey": user["apiKey"], "consent": user["consent"] == 1}
-    return ret
+    with getMainDB() as conn:
+        now = datetime.datetime.utcnow()
+        yesterday = now - datetime.timedelta(days=1)
+        email = email.lower()
+        c = conn.execute("select email, ske_apiKey, ske_username, apiKey, consent from users where email=? and sessionKey=? and sessionLast>=?", (email, sessionkey, yesterday))
+        user = c.fetchone()
+        if not user:
+            return {"loggedin": False, "email": None}
+        conn.execute("update users set sessionLast=? where email=?", (now, email))
+        conn.commit()
+        ret = {"loggedin": True, "email": email, "isAdmin": email in siteconfig["admins"],
+            "ske_username": user["ske_username"], "ske_apiKey": user["ske_apiKey"],
+            "apiKey": user["apiKey"], "consent": user["consent"] == 1}
+        return ret
 
 def verifyLoginAndDictAccess(email: str, sessionkey: str, dictDB: Connection):
     ret = verifyLogin(email, sessionkey)
@@ -1475,150 +1476,143 @@ def generateDictId(size: int=8):
 def login(email: str, password: str):
     if siteconfig["readonly"]:
         return {"success": False}
-    conn = getMainDB()
-    passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
-    c = conn.execute("select email, apiKey, ske_username, ske_apiKey, consent from users where email=? and passwordHash=?", (email.lower(), passhash))
-    user = c.fetchone()
-    if not user:
-        return {"success": False}
-    key = generateKey()
-    now = datetime.datetime.utcnow()
-    conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, email))
-    conn.commit()
-    return {"success": True, "email": user["email"], "key": key, "ske_username": user["ske_username"], "ske_apiKey": user["ske_apiKey"], "apiKey": user["apiKey"], "consent": user["consent"] == 1}
+    with getMainDB() as conn:
+        passhash = hashlib.sha1(password.encode("utf-8")).hexdigest()
+        c = conn.execute("select email, apiKey, ske_username, ske_apiKey, consent from users where email=? and passwordHash=?", (email.lower(), passhash))
+        user = c.fetchone()
+        if not user:
+            return {"success": False}
+        key = generateKey()
+        now = datetime.datetime.utcnow()
+        conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, email))
+        conn.commit()
+        return {"success": True, "email": user["email"], "key": key, "ske_username": user["ske_username"], "ske_apiKey": user["ske_apiKey"], "apiKey": user["apiKey"], "consent": user["consent"] == 1}
 
 def logout(user: User):
-    conn = getMainDB()
-    conn.execute("update users set sessionKey='', sessionLast='' where email=?", (user["email"],))
-    conn.commit()
-    return True
+    with getMainDB() as conn:
+        conn.execute("update users set sessionKey='', sessionLast='' where email=?", (user["email"],))
+        conn.commit()
+        return True
 
 def sendSignupToken(email: str, remoteip: str):
     if siteconfig["readonly"]:
         return False
-    conn = getMainDB()
-    c = conn.execute("select email from users where email=?", (email.lower(),))
-    user = c.fetchone()
-    if not user:
-        token = secrets.token_hex()
-        tokenurl = siteconfig["baseUrl"] + "#/createaccount/" + token
-        expireDate = datetime.datetime.now() + datetime.timedelta(days=2)
-        mailSubject = "Lexonomy signup"
-        mailText = "Dear Lexonomy user,\n\n"
-        mailText += "Somebody (hopefully you, from the address "+remoteip+") requested to create a new Lexonomy account. Please follow the link below to create your account:\n\n"
-        mailText += tokenurl + "\n\n"
-        mailText += "For security reasons this link is only valid for two days (until "+expireDate.isoformat()+"). If you did not request an account, you can safely ignore this message. \n\n"
-        mailText += "Yours,\nThe Lexonomy team"
-        conn.execute("insert into register_tokens (email, requestAddress, token, expiration) values (?, ?, ?, ?)", (email, remoteip, token, expireDate))
-        conn.commit()
-        sendmail(email, mailSubject, mailText)
-        return True
-    else:
-        return False
+
+    with getMainDB() as conn:
+        if conn.execute("select email from users where email=?", (email.lower(),)).fetchone():
+            return False # user already exists, cannot register again
+
+    token = secrets.token_hex()
+    tokenurl = siteconfig["baseUrl"] + "#/createaccount/" + token
+    expireDate = datetime.datetime.now() + datetime.timedelta(days=2)
+    mailSubject = "Lexonomy signup"
+    mailText = "Dear Lexonomy user,\n\n"
+    mailText += "Somebody (hopefully you, from the address "+remoteip+") requested to create a new Lexonomy account. Please follow the link below to create your account:\n\n"
+    mailText += tokenurl + "\n\n"
+    mailText += "For security reasons this link is only valid for two days (until "+expireDate.isoformat()+"). If you did not request an account, you can safely ignore this message. \n\n"
+    mailText += "Yours,\nThe Lexonomy team"
+    conn.execute("insert into register_tokens (email, requestAddress, token, expiration) values (?, ?, ?, ?)", (email, remoteip, token, expireDate))
+    conn.commit()
+    sendmail(email, mailSubject, mailText)
+    return True
+
 
 def sendToken(email: str, remoteip: str):
     if siteconfig["readonly"]:
         return False
-    conn = getMainDB()
-    c = conn.execute("select email from users where email=?", (email.lower(),))
-    user = c.fetchone()
-    if user:
-        token = secrets.token_hex()
-        tokenurl = siteconfig["baseUrl"] + "#/recoverpwd/" + token
-        expireDate = datetime.datetime.now() + datetime.timedelta(days=2)
-        mailSubject = "Lexonomy password reset"
-        mailText = "Dear Lexonomy user,\n\n"
-        mailText += "Somebody (hopefully you, from the address "+remoteip+") requested a new password for the Lexonomy account "+email+". You can reset your password by clicking the link below:\n\n";
-        mailText += tokenurl + "\n\n"
-        mailText += "For security reasons this link is only valid for two days (until "+expireDate.isoformat()+"). If you did not request a password reset, you can safely ignore this message. \n\n"
-        mailText += "Yours,\nThe Lexonomy team"
-        conn.execute("insert into recovery_tokens (email, requestAddress, token, expiration) values (?, ?, ?, ?)", (email, remoteip, token, expireDate))
-        conn.commit()
-        sendmail(email, mailSubject, mailText)
-        return True
-    else:
-        return False
+    with getMainDB() as conn:
+        if not conn.execute("select email from users where email=?", (email.lower(),)).fetchone():
+            return False # user does not exist, cannot reset password
+
+    token = secrets.token_hex()
+    tokenurl = siteconfig["baseUrl"] + "#/recoverpwd/" + token
+    expireDate = datetime.datetime.now() + datetime.timedelta(days=2)
+    mailSubject = "Lexonomy password reset"
+    mailText = "Dear Lexonomy user,\n\n"
+    mailText += "Somebody (hopefully you, from the address "+remoteip+") requested a new password for the Lexonomy account "+email+". You can reset your password by clicking the link below:\n\n";
+    mailText += tokenurl + "\n\n"
+    mailText += "For security reasons this link is only valid for two days (until "+expireDate.isoformat()+"). If you did not request a password reset, you can safely ignore this message. \n\n"
+    mailText += "Yours,\nThe Lexonomy team"
+    conn.execute("insert into recovery_tokens (email, requestAddress, token, expiration) values (?, ?, ?, ?)", (email, remoteip, token, expireDate))
+    conn.commit()
+    sendmail(email, mailSubject, mailText)
+    return True
 
 def verifyToken(token: str, tokenType: Literal["recovery", "register"]):
-    conn = getMainDB()
-    c = conn.execute("select * from "+tokenType+"_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,))
-    row = c.fetchone()
-    if row:
-        return True
-    else:
-        return False
+    with getMainDB() as conn:
+        return bool(conn.execute("select * from "+tokenType+"_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,)))
 
 def createAccount(token: str, password: str, remoteip: str):
-    conn = getMainDB()
-    c = conn.execute("select * from register_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,))
-    row = c.fetchone()
-    if row:
-        c2 = conn.execute("select * from users where email=?", (row["email"],))
-        row2 = c2.fetchone()
-        if not row2:
+    with getMainDB() as conn:
+        c = conn.execute("select * from register_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,))
+        row = c.fetchone()
+        if row:
+            c2 = conn.execute("select * from users where email=?", (row["email"],))
+            row2 = c2.fetchone()
+            if not row2:
+                passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
+                conn.execute("insert into users (email,passwordHash) values (?,?)", (row["email"], passhash))
+                conn.execute("update register_tokens set usedDate=datetime('now'), usedAddress=? where token=?", (remoteip, token))
+                conn.commit()
+                # notify admins?
+                if siteconfig.get('notifyRegister') == True:
+                    mailSubject = "Lexonomy, new user registered"
+                    mailText = "Hi,\n\n"
+                    mailText += "new user registered to Lexonomy at " + siteconfig["baseUrl"] + " :\n\n"
+                    mailText += "  " + row["email"]
+                    mailText += "\n\nYours,\nThe Lexonomy team"
+                    for adminMail in siteconfig["admins"]:
+                        sendmail(adminMail, mailSubject, mailText)
+                return True
+            else:
+                return False
+        else:
+            return False
+
+def resetPwd(token: str, password: str, remoteip: str):
+    with getMainDB() as conn:
+        c = conn.execute("select * from recovery_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,))
+        row = c.fetchone()
+        if row:
             passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
-            conn.execute("insert into users (email,passwordHash) values (?,?)", (row["email"], passhash))
-            conn.execute("update register_tokens set usedDate=datetime('now'), usedAddress=? where token=?", (remoteip, token))
+            conn.execute("update users set passwordHash=? where email=?", (passhash, row["email"]))
+            conn.execute("update recovery_tokens set usedDate=datetime('now'), usedAddress=? where token=?", (remoteip, token))
             conn.commit()
-            # notify admins?
-            if siteconfig.get('notifyRegister') == True:
-                mailSubject = "Lexonomy, new user registered"
-                mailText = "Hi,\n\n"
-                mailText += "new user registered to Lexonomy at " + siteconfig["baseUrl"] + " :\n\n"
-                mailText += "  " + row["email"]
-                mailText += "\n\nYours,\nThe Lexonomy team"
-                for adminMail in siteconfig["admins"]:
-                    sendmail(adminMail, mailSubject, mailText)
             return True
         else:
             return False
-    else:
-        return False
-
-def resetPwd(token: str, password: str, remoteip: str):
-    conn = getMainDB()
-    c = conn.execute("select * from recovery_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,))
-    row = c.fetchone()
-    if row:
-        passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
-        conn.execute("update users set passwordHash=? where email=?", (passhash, row["email"]))
-        conn.execute("update recovery_tokens set usedDate=datetime('now'), usedAddress=? where token=?", (remoteip, token))
-        conn.commit()
-        return True
-    else:
-        return False
 
 def setConsent(email: str, consent: bool):
-    conn = getMainDB()
-    conn.execute("update users set consent=? where email=?", (consent, email))
-    conn.commit()
-    return True
+    with getMainDB() as conn:
+        conn.execute("update users set consent=? where email=?", (consent, email))
+        conn.commit()
+        return True
 
 def changePwd(email: str, password: str):
-    conn = getMainDB()
-    passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
-    conn.execute("update users set passwordHash=? where email=?", (passhash, email))
-    conn.commit()
-    return True
+    with getMainDB() as conn:
+        passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
+        conn.execute("update users set passwordHash=? where email=?", (passhash, email))
+        conn.commit()
+        return True
 
 def changeSkeUserName(email: str, ske_userName: str):
-    conn = getMainDB()
-    conn.execute("update users set ske_username=? where email=?", (ske_userName, email))
-    conn.commit()
-    return True
+    with getMainDB() as conn:
+        conn.execute("update users set ske_username=? where email=?", (ske_userName, email))
+        conn.commit()
+        return True
 
 def changeSkeApiKey(email: str, ske_apiKey: str):
-    conn = getMainDB()
-    conn.execute("update users set ske_apiKey=? where email=?", (ske_apiKey, email))
-    conn.commit()
-    return True
+    with getMainDB() as conn:
+        conn.execute("update users set ske_apiKey=? where email=?", (ske_apiKey, email))
+        conn.commit()
+        return True
 
 def updateUserApiKey(user: User, apiKey: str):
-    conn = getMainDB()
-    conn.execute("update users set apiKey=? where email=?", (apiKey, user["email"]))
-    conn.commit()
-    sendApiKeyToSke(user, apiKey)
-    return True
+    with getMainDB() as conn:
+        conn.execute("update users set apiKey=? where email=?", (apiKey, user["email"]))
+        conn.commit()
+        sendApiKeyToSke(user, apiKey)
+        return True
 
 def sendApiKeyToSke(user: User, apiKey: str):
     if user["ske_username"] and user["ske_apiKey"]:
@@ -1629,18 +1623,18 @@ def sendApiKeyToSke(user: User, apiKey: str):
     return True
 
 def prepareApiKeyForSke(email: str):
-    conn = getMainDB()
-    c = conn.execute("select * from users where email=?", (email,))
-    row = c.fetchone()
-    if row:
-        if row["apiKey"] == None or row["apiKey"] == "":
-            lexapi = generateKey()
-            conn.execute("update users set apiKey=? where email=?", (lexapi, email))
-            conn.commit()
-        else:
-            lexapi = row["apiKey"]
-        sendApiKeyToSke(row, lexapi)
-    return True
+    with getMainDB() as conn:
+        c = conn.execute("select * from users where email=?", (email,))
+        row = c.fetchone()
+        if row:
+            if row["apiKey"] == None or row["apiKey"] == "":
+                lexapi = generateKey()
+                conn.execute("update users set apiKey=? where email=?", (lexapi, email))
+                conn.commit()
+            else:
+                lexapi = row["apiKey"]
+            sendApiKeyToSke(row, lexapi)
+        return True
 
 class JWTDataUser(TypedDict):
     id: str
@@ -1661,37 +1655,37 @@ class JTWStatusError(TypedDict):
     error: str
 
 def processJWT(user: User, jwtdata: JWTData) -> Union[JWTStatusOkay, JTWStatusError]:
-    conn = getMainDB()
-    c = conn.execute("select * from users where ske_id=?", (jwtdata["user"]["id"],))
-    row = c.fetchone()
-    key = generateKey()
-    now = datetime.datetime.utcnow()
-    if row:
-        #if SkE ID in database = log in user
-        conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, row["email"]))
-        conn.commit()
-        prepareApiKeyForSke(row["email"])
-        return {"success": True, "email": row["email"], "key": key}
-    else:
-        if user["loggedin"]:
-            #user logged in = save SkE ID in database
-            conn.execute("update users set ske_id=?, ske_username=?, ske_apiKey=?, sessionKey=?, sessionLast=? where email=?", (jwtdata["user"]["id"], jwtdata["user"]["username"], jwtdata["user"]["api_key"], key, now, user["email"]))
+    with getMainDB() as conn:
+        c = conn.execute("select * from users where ske_id=?", (jwtdata["user"]["id"],))
+        row = c.fetchone()
+        key = generateKey()
+        now = datetime.datetime.utcnow()
+        if row:
+            #if SkE ID in database = log in user
+            conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, row["email"]))
             conn.commit()
-            prepareApiKeyForSke(user["email"])
-            return {"success": True, "email": user["email"], "key": key}
+            prepareApiKeyForSke(row["email"])
+            return {"success": True, "email": row["email"], "key": key}
         else:
-            #user not logged in = register and log in
-            email = jwtdata["user"]["email"].lower()
-            c2 = conn.execute("select * from users where email=?", (email,))
-            row2 = c2.fetchone()
-            if not row2:
-                lexapi = generateKey()
-                conn.execute("insert into users (email, passwordHash, ske_id, ske_username, ske_apiKey, sessionKey, sessionLast, apiKey) values (?, null, ?, ?, ?, ?, ?, ?)", (email, jwtdata["user"]["id"], jwtdata["user"]["username"], jwtdata["user"]["api_key"], key, now, lexapi))
+            if user["loggedin"]:
+                #user logged in = save SkE ID in database
+                conn.execute("update users set ske_id=?, ske_username=?, ske_apiKey=?, sessionKey=?, sessionLast=? where email=?", (jwtdata["user"]["id"], jwtdata["user"]["username"], jwtdata["user"]["api_key"], key, now, user["email"]))
                 conn.commit()
-                prepareApiKeyForSke(email)
-                return {"success": True, "email": email, "key": key}
+                prepareApiKeyForSke(user["email"])
+                return {"success": True, "email": user["email"], "key": key}
             else:
-                return {"success": False, "error": "user with email " + email + " already exists. Log-in and connect account to SkE."}
+                #user not logged in = register and log in
+                email = jwtdata["user"]["email"].lower()
+                c2 = conn.execute("select * from users where email=?", (email,))
+                row2 = c2.fetchone()
+                if not row2:
+                    lexapi = generateKey()
+                    conn.execute("insert into users (email, passwordHash, ske_id, ske_username, ske_apiKey, sessionKey, sessionLast, apiKey) values (?, null, ?, ?, ?, ?, ?, ?)", (email, jwtdata["user"]["id"], jwtdata["user"]["username"], jwtdata["user"]["api_key"], key, now, lexapi))
+                    conn.commit()
+                    prepareApiKeyForSke(email)
+                    return {"success": True, "email": email, "key": key}
+                else:
+                    return {"success": False, "error": "user with email " + email + " already exists. Log-in and connect account to SkE."}
 
 
 def dictExists(dictID: str) -> bool:
@@ -1714,39 +1708,39 @@ def makeDict(dictID: str, template: str, title: str, blurb: str, email: str):
         template = os.path.join("dictTemplates", template + ".sqlite.schema")
     #init db schema
     schema = open(template, 'r').read()
-    conn = sqlite3.connect(os.path.join(siteconfig["dataDir"], "dicts", dictID + ".sqlite"))
-    conn.executescript(schema)
-    conn.commit()
+    with sqlite3.connect(os.path.join(siteconfig["dataDir"], "dicts", dictID + ".sqlite")) as conn:
+        conn.executescript(schema)
+        conn.commit()
     #update dictionary info
     users = {email: {"canEdit": True, "canConfig": True, "canDownload": True, "canUpload": True}}
-    dictDB = getDB(dictID)
-    c = dictDB.execute("SELECT count(*) AS total FROM configs WHERE id='users'")
-    r = c.fetchone()
-    if r['total'] == 0:
-        dictDB.execute("INSERT INTO configs (id, json) VALUES (?, ?)", ("users", json.dumps(users)))
-    else:
-        dictDB.execute("UPDATE configs SET json=? WHERE id=?", (json.dumps(users), "users"))
-    ident = {"title": title, "blurb": blurb}
-    c = dictDB.execute("SELECT count(*) AS total FROM configs WHERE id='ident'")
-    r = c.fetchone()
-    if r['total'] == 0:
-        dictDB.execute("INSERT INTO configs (id, json) VALUES (?, ?)", ("ident", json.dumps(ident)))
-    else:
-        dictDB.execute("UPDATE configs SET json=? WHERE id=?", (json.dumps(ident), "ident"))
-    dictDB.commit()
-    attachDict(dictDB, dictID)
-    return True
+    with getDB(dictID) as dictDB:    
+        c = dictDB.execute("SELECT count(*) AS total FROM configs WHERE id='users'")
+        r = c.fetchone()
+        if r['total'] == 0:
+            dictDB.execute("INSERT INTO configs (id, json) VALUES (?, ?)", ("users", json.dumps(users)))
+        else:
+            dictDB.execute("UPDATE configs SET json=? WHERE id=?", (json.dumps(users), "users"))
+        ident = {"title": title, "blurb": blurb}
+        c = dictDB.execute("SELECT count(*) AS total FROM configs WHERE id='ident'")
+        r = c.fetchone()
+        if r['total'] == 0:
+            dictDB.execute("INSERT INTO configs (id, json) VALUES (?, ?)", ("ident", json.dumps(ident)))
+        else:
+            dictDB.execute("UPDATE configs SET json=? WHERE id=?", (json.dumps(ident), "ident"))
+        dictDB.commit()
+        attachDict(dictDB, dictID)
+        return True
 
 def attachDict(dictDB: Connection, dictID: str):
     configs = readDictConfigs(dictDB)
-    conn = getMainDB()
-    conn.execute("delete from dicts where id=?", (dictID,))
-    conn.execute("delete from user_dict where dict_id=?", (dictID,))
-    title = configs["ident"]["title"]
-    conn.execute("insert into dicts(id, title) values (?, ?)", (dictID, title))
-    for email in configs["users"]:
-        conn.execute("insert into user_dict(dict_id, user_email) values (?, ?)", (dictID, email.lower()))
-    conn.commit()
+    with getMainDB() as conn:
+        conn.execute("delete from dicts where id=?", (dictID,))
+        conn.execute("delete from user_dict where dict_id=?", (dictID,))
+        title = configs["ident"]["title"]
+        conn.execute("insert into dicts(id, title) values (?, ?)", (dictID, title))
+        for email in configs["users"]:
+            conn.execute("insert into user_dict(dict_id, user_email) values (?, ?)", (dictID, email.lower()))
+        conn.commit()
 
 def cloneDict(dictID: str, email: str):
     newID = suggestDictId()
@@ -1756,29 +1750,29 @@ def cloneDict(dictID: str, email: str):
         if os.path.exists(old_file):
             shutil.copy(old_file, new_file)
 
-    newDB = getDB(newID)
-    res = newDB.execute("select json from configs where id='ident'")
-    row = res.fetchone()
-    ident = {"title": "?", "blurb": "?"}
-    if row:
-        ident = json.loads(row["json"])
-        ident["title"] = "Clone of " + ident["title"]
-    newDB.execute("update configs set json=? where id='ident'", (json.dumps(ident),))
-    newDB.commit()
-    attachDict(newDB, newID)
-    return {"success": True, "dictID": newID, "title": ident["title"]}
+    with getDB(newID) as newDB:
+        res = newDB.execute("select json from configs where id='ident'")
+        row = res.fetchone()
+        ident = {"title": "?", "blurb": "?"}
+        if row:
+            ident = json.loads(row["json"])
+            ident["title"] = "Clone of " + ident["title"]
+        newDB.execute("update configs set json=? where id='ident'", (json.dumps(ident),))
+        newDB.commit()
+        attachDict(newDB, newID)
+        return {"success": True, "dictID": newID, "title": ident["title"]}
 
 def destroyDict(dictID: str):
-    conn = getMainDB()
-    conn.execute("delete from dicts where id=?", (dictID,))
-    conn.execute("delete from user_dict where dict_id=?", (dictID,))
-    conn.commit()
-    os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite"))
-    if os.path.exists(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-wal")):
-        os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-wal"))
-    if os.path.exists(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-shm")):
-        os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-shm"))
-    return True
+    with getMainDB() as conn:
+        conn.execute("delete from dicts where id=?", (dictID,))
+        conn.execute("delete from user_dict where dict_id=?", (dictID,))
+        conn.commit()
+        os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite"))
+        if os.path.exists(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-wal")):
+            os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-wal"))
+        if os.path.exists(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-shm")):
+            os.remove(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite-shm"))
+        return True
 
 def moveDict(oldID: str, newID: str):
     # Only allow IDs with word, space, underscore, or dash characters (including non-western letters)
@@ -1788,14 +1782,13 @@ def moveDict(oldID: str, newID: str):
     
     # Perform an operation that will fail if the database is in use, to ensure it is not locked.
     # Performing a checkpoint also nicely reduces the size of the (sometimes quite large) WAL file.
-    try:
-        db = getDB(oldID)
-        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        db.close()
-    except Exception:
-        print(f"moveDict: Failed to close database connection for {oldID}. It may not be open or in use.")
-        return False
-    
+    with getDB(oldID) as db:
+        try:
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except Exception:
+            print(f"moveDict: Failed to commit checkpoint for {oldID}. The database may be in use.")
+            return False
+
     import shutil
 
     # NOTE: USE COPY + DELETE, DO NOT USE MOVE/RENAME
@@ -1816,7 +1809,8 @@ def moveDict(oldID: str, newID: str):
                 return False
 
     # Attach the new dict and destroy the old one
-    attachDict(getDB(newID), newID)
+    with getDB(newID) as newDB:
+        attachDict(newDB, newID)
     destroyDict(oldID)
     
     return True
@@ -1850,95 +1844,96 @@ class DictInfo(TypedDict):
 def getDictsByUser(email: str) -> list[DictInfo]:
     dicts: List[DictInfo] = []
     email = str(email).lower()
-    conn = getMainDB()
-    favs = []
-    c = conn.execute("SELECT * FROM dict_fav WHERE user_email=?", (email,))
-    for r in c.fetchall():
-        favs.append(r['dict_id'])
-    c = conn.execute("SELECT DISTINCT d.id, d.title FROM dicts AS d INNER JOIN user_dict AS ud ON ud.dict_id=d.id WHERE ud.user_email=? OR d.id IN (SELECT dict_id FROM dict_fav WHERE user_email=?) ORDER BY d.title", (email, email))
-    for r in c.fetchall():
-        info: DictInfo = {"id": r["id"], "title": r["title"], "hasLinks": False, "lang": "", "favorite": False}
-        try:
-            dictDB = getDB(r["id"])
-            cc = dictDB.execute("select count(*) as total from entries")
-            info["size"] = cc.fetchone()["total"]
-            configs = readDictConfigs(dictDB)
-            if configs["users"][email] and configs["users"][email]["canEdit"]:
-                info["currentUserCanEdit"] = True
-            if configs["users"][email] and configs["users"][email]["canConfig"]:
-                info["currentUserCanDelete"] = True
-            if configs["links"] and len(configs["links"])>0:
-                info["hasLinks"] = True
-            if configs["ident"] and configs["ident"]["lang"]:
-                info["lang"] = configs["ident"]["lang"]
-            if r["id"] in favs:
-                info["favorite"] = True
-        except:
-            info["broken"] = True
-        dicts.append(info)
-    return dicts
+    with getMainDB() as conn:
+        favs = []
+        c = conn.execute("SELECT * FROM dict_fav WHERE user_email=?", (email,))
+        for r in c.fetchall():
+            favs.append(r['dict_id'])
+        c = conn.execute("SELECT DISTINCT d.id, d.title FROM dicts AS d INNER JOIN user_dict AS ud ON ud.dict_id=d.id WHERE ud.user_email=? OR d.id IN (SELECT dict_id FROM dict_fav WHERE user_email=?) ORDER BY d.title", (email, email))
+        for r in c.fetchall():
+            info: DictInfo = {"id": r["id"], "title": r["title"], "hasLinks": False, "lang": "", "favorite": False}
+            try:
+                with getDB(r["id"]) as dictDB:
+                    cc = dictDB.execute("select count(*) as total from entries")
+                    info["size"] = cc.fetchone()["total"]
+                    configs = readDictConfigs(dictDB)
+                    if configs["users"][email] and configs["users"][email]["canEdit"]:
+                        info["currentUserCanEdit"] = True
+                    if configs["users"][email] and configs["users"][email]["canConfig"]:
+                        info["currentUserCanDelete"] = True
+                    if configs["links"] and len(configs["links"])>0:
+                        info["hasLinks"] = True
+                    if configs["ident"] and configs["ident"]["lang"]:
+                        info["lang"] = configs["ident"]["lang"]
+                    if r["id"] in favs:
+                        info["favorite"] = True
+            except:
+                info["broken"] = True
+            dicts.append(info)
+        return dicts
 
 def getPublicDicts() -> list[DictInfo]:
-    conn = getMainDB()
-    c = conn.execute("select * from dicts order by title")
-    dicts: List[DictInfo] = []
-    for r in c.fetchall():
-        try:
-            dictDB = getDB(r["id"])
-            configs = readDictConfigs(dictDB)
-        except:
-            continue
-        if configs["publico"]["public"]:
-            cc = dictDB.execute("select count(*) as total from entries")
-            size = cc.fetchone()["total"]
-            configs = loadHandleMeta(configs)
-            dictinfo: DictInfo = {"id": r["id"], "title": r["title"], "author": "", "lang": configs["ident"].get("lang"), "licence": configs["publico"]["licence"], "size": size, "hasLinks": False}
-            if len(list(configs["users"].keys())) > 0:
-                dictinfo["author"] = re.sub(r"@.*","@...", list(configs["users"].keys())[0])
-            if title := configs["metadata"].get("dc.title"):
-                dictinfo["title"] = title
-            if iso := configs["metadata"].get("dc.language.iso"):
-                langs = [t['lang'] for t in get_iso639_1() if t['code3'] == configs["metadata"]["dc.language.iso"][0]]
-                dictinfo["lang"] = langs[0] if len(langs) > 0 else dictinfo["lang"]
-            if configs["metadata"].get("dc.rights") and configs["metadata"].get("dc.rights") != "":
-                dictinfo["licence"] = configs["metadata"].get("dc.rights")
-            if configs["metadata"].get("dc.contributor.author") and len(configs["metadata"].get("dc.contributor.author")) > 0:
-                dictinfo["author"] = '; '.join(configs["metadata"].get("dc.contributor.author"))
-            dicts.append(dictinfo)
-    return dicts
+    with getMainDB() as conn:
+        c = conn.execute("select * from dicts order by title")
+        dicts: List[DictInfo] = []
+        for r in c.fetchall():
+            try: 
+                with getDB(r["id"]) as dictDB:
+                    configs = readDictConfigs(dictDB)
+                    if configs["publico"]["public"]:
+                        cc = dictDB.execute("select count(*) as total from entries")
+                        size = cc.fetchone()["total"]
+                        configs = loadHandleMeta(configs)
+                        dictinfo: DictInfo = {"id": r["id"], "title": r["title"], "author": "", "lang": configs["ident"].get("lang"), "licence": configs["publico"]["licence"], "size": size, "hasLinks": False}
+                        if len(list(configs["users"].keys())) > 0:
+                            dictinfo["author"] = re.sub(r"@.*","@...", list(configs["users"].keys())[0])
+                        if title := configs["metadata"].get("dc.title"):
+                            dictinfo["title"] = title
+                        if iso := configs["metadata"].get("dc.language.iso"):
+                            langs = [t['lang'] for t in get_iso639_1() if t['code3'] == configs["metadata"]["dc.language.iso"][0]]
+                            dictinfo["lang"] = langs[0] if len(langs) > 0 else dictinfo["lang"]
+                        if configs["metadata"].get("dc.rights") and configs["metadata"].get("dc.rights") != "":
+                            dictinfo["licence"] = configs["metadata"].get("dc.rights")
+                        if configs["metadata"].get("dc.contributor.author") and len(configs["metadata"].get("dc.contributor.author")) > 0:
+                            dictinfo["author"] = '; '.join(configs["metadata"].get("dc.contributor.author"))
+                        dicts.append(dictinfo)
+            except:
+                continue
+        return dicts
 
 def getLangList() -> List[Language]:
     langs: List[Language] = []
     codes = get_iso639_1()
-    conn = getMainDB()
-    c = conn.execute("SELECT DISTINCT language FROM dicts WHERE language!='' ORDER BY language")
-    for r in c.fetchall():
-        lang: IsoCode = next((item for item in codes if item["code"] == r["language"]), {})
-        langs.append({"code": r["language"], "language": lang.get("lang")})
-    return langs
+    with getMainDB() as conn:
+        c = conn.execute("SELECT DISTINCT language FROM dicts WHERE language!='' ORDER BY language")
+        for r in c.fetchall():
+            lang: IsoCode = next((item for item in codes if item["code"] == r["language"]), {})
+            langs.append({"code": r["language"], "language": lang.get("lang")})
+        return langs
 
 def getDictList(lang: str, withLinks: bool, loadHandle: bool=False):
     dicts: List[DictInfo] = []
-    conn = getMainDB()
-    if lang:
-        c = conn.execute("SELECT * FROM dicts WHERE language=? ORDER BY title", (lang, ))
-    else:
-        c = conn.execute("SELECT * FROM dicts ORDER BY title")
-    for r in c.fetchall():
-        info: DictInfo = {"id": r["id"], "title": r["title"], "lang": r["language"], "hasLinks": False}
-        try:
-            configs = readDictConfigs(getDB(r["id"]))
-            if configs["links"] and len(configs["links"])>0:
-                info["hasLinks"] = True
-            if loadHandle:
-                configs = loadHandleMeta(configs)
-                if configs["metadata"].get("dc.title"):
-                    info["title"] = configs["metadata"]["dc.title"]
-        except:
-            info["broken"] = True
-        if not withLinks or (withLinks == True and info["hasLinks"] == True):
-            dicts.append(info)
-    return dicts
+    with getMainDB() as conn:
+        if lang:
+            c = conn.execute("SELECT * FROM dicts WHERE language=? ORDER BY title", (lang, ))
+        else:
+            c = conn.execute("SELECT * FROM dicts ORDER BY title")
+        for r in c.fetchall():
+            info: DictInfo = {"id": r["id"], "title": r["title"], "lang": r["language"], "hasLinks": False}
+            try:
+                with getDB(r["id"]) as dictDB:
+                    configs = readDictConfigs(dictDB)
+                    if configs["links"] and len(configs["links"])>0:
+                        info["hasLinks"] = True
+                    if loadHandle:
+                        configs = loadHandleMeta(configs)
+                        if configs["metadata"].get("dc.title"):
+                            info["title"] = configs["metadata"]["dc.title"]
+            except:
+                info["broken"] = True
+            if not withLinks or (withLinks == True and info["hasLinks"] == True):
+                dicts.append(info)
+        return dicts
 
 def getLinkList(headword: str, sourceLang: str, sourceDict: str, targetLang: str) -> List[DictionaryLink]:
     links: List[DictionaryLink] = []
@@ -2169,15 +2164,15 @@ def getLinkList(headword: str, sourceLang: str, sourceDict: str, targetLang: str
     return links
 
 def listUsers(searchtext: str, howmany: int) -> UserList:
-    conn = getMainDB()
-    c = conn.execute("select * from users where email like ? order by email limit ?", ("%"+searchtext+"%", howmany))
-    users: List[ListedUser] = []
-    for r in c.fetchall():
-        users.append({"id": r["email"], "title": r["email"]})
-    c = conn.execute("select count(*) as total from users where email like ?", ("%"+searchtext+"%", ))
-    r = c.fetchone()
-    total = r["total"]
-    return {"entries":users, "total": total}
+    with getMainDB() as conn:
+        c = conn.execute("select * from users where email like ? order by email limit ?", ("%"+searchtext+"%", howmany))
+        users: List[ListedUser] = []
+        for r in c.fetchall():
+            users.append({"id": r["email"], "title": r["email"]})
+        c = conn.execute("select count(*) as total from users where email like ?", ("%"+searchtext+"%", ))
+        r = c.fetchone()
+        total = r["total"]
+        return {"entries":users, "total": total}
 
 # Admin functionality
 def createUser(xml: str):
@@ -2185,31 +2180,31 @@ def createUser(xml: str):
     root = ET.fromstring(xml)
     email = root.attrib["email"]
     passhash = hashlib.sha1(root.attrib["password"].encode("utf-8")).hexdigest();
-    conn = getMainDB()
-    conn.execute("insert into users(email, passwordHash) values(?, ?)", (email.lower(), passhash))
-    conn.commit()
-    return {"entryID": email, "adjustedXml": readUser(email)["xml"]}
+    with getMainDB() as conn:
+        conn.execute("insert into users(email, passwordHash) values(?, ?)", (email.lower(), passhash))
+        conn.commit()
+        return {"entryID": email, "adjustedXml": readUser(email)["xml"]}
 
 def updateUser(email, xml):
     from lxml import etree as ET
     root = ET.fromstring(xml)
     if root.attrib['password']:
         passhash = hashlib.sha1(root.attrib["password"].encode("utf-8")).hexdigest();
-        conn = getMainDB()
-        conn.execute("update users set passwordHash=? where email=?", (passhash, email.lower()))
-        conn.commit()
+        with getMainDB() as conn:
+            conn.execute("update users set passwordHash=? where email=?", (passhash, email.lower()))
+            conn.commit()
     return readUser(email)
 
 def deleteUser(email: str):
-    conn = getMainDB()
-    conn.execute("delete from users where email=?", (email.lower(),))
-    conn.commit()
+    with getMainDB() as conn:
+        conn.execute("delete from users where email=?", (email.lower(),))
+        conn.commit()
     return True
 
 def readUser(email: str):
-    conn = getMainDB()
-    c = conn.execute("select * from users where email=?", (email.lower(), ))
-    r = c.fetchone()
+    with getMainDB() as conn:
+        c = conn.execute("select * from users where email=?", (email.lower(), ))
+        r = c.fetchone()
     if r:
         if r["sessionLast"]:
             xml =  "<user lastSeen='"+r["sessionLast"]+"'>"
@@ -2224,29 +2219,29 @@ def readUser(email: str):
         return {"email":"", "xml":""}
 
 def listDicts(searchtext, howmany):
-    conn = getMainDB()
-    c = conn.execute("select * from dicts where id like ? or title like ? order by id limit ?", ("%"+searchtext+"%", "%"+searchtext+"%", howmany))
-    dicts = []
-    for r in c.fetchall():
-        dicts.append({"id": r["id"], "title": r["title"]})
-    c = conn.execute("select count(*) as total from dicts where id like ? or title like ?", ("%"+searchtext+"%", "%"+searchtext+"%"))
-    r = c.fetchone()
-    total = r["total"]
-    return {"entries": dicts, "total": total}
+    with getMainDB() as conn:
+        c = conn.execute("select * from dicts where id like ? or title like ? order by id limit ?", ("%"+searchtext+"%", "%"+searchtext+"%", howmany))
+        dicts = []
+        for r in c.fetchall():
+            dicts.append({"id": r["id"], "title": r["title"]})
+        c = conn.execute("select count(*) as total from dicts where id like ? or title like ?", ("%"+searchtext+"%", "%"+searchtext+"%"))
+        r = c.fetchone()
+        total = r["total"]
+        return {"entries": dicts, "total": total}
 
 def readDict(dictId):
-    conn = getMainDB()
-    c = conn.execute("select * from dicts where id=?", (dictId, ))
-    r = c.fetchone()
-    if r:
-        xml =  "<dict id='"+clean4xml(r["id"])+"' title='"+clean4xml(r["title"])+"'>"
-        c2 = conn.execute("select u.email from user_dict as ud inner join users as u on u.email=ud.user_email where ud.dict_id=? order by u.email", (r["id"], ))
-        for r2 in c2.fetchall():
-            xml += "<user email='" + r2["email"] + "'/>"
-        xml += "</dict>"
-        return {"id": r["id"], "xml": xml}
-    else:
-        return {"id":"", "xml":""}
+    with getMainDB() as conn:
+        c = conn.execute("select * from dicts where id=?", (dictId, ))
+        r = c.fetchone()
+        if r:
+            xml =  "<dict id='"+clean4xml(r["id"])+"' title='"+clean4xml(r["title"])+"'>"
+            c2 = conn.execute("select u.email from user_dict as ud inner join users as u on u.email=ud.user_email where ud.dict_id=? order by u.email", (r["id"], ))
+            for r2 in c2.fetchall():
+                xml += "<user email='" + r2["email"] + "'/>"
+            xml += "</dict>"
+            return {"id": r["id"], "xml": xml}
+        else:
+            return {"id":"", "xml":""}
 
 def clean4xml(text: str) -> str:
     "Escape the xml"
@@ -2520,9 +2515,9 @@ def updateDictConfig(dictDB: Connection, dictID: str, configID: str, content: An
         attachDict(dictDB, dictID)
         if content.get('lang'):
             lang = content.get('lang')
-            conn = getMainDB()
-            conn.execute("UPDATE dicts SET language=? WHERE id=?", (lang, dictID))
-            conn.commit()
+            with getMainDB() as conn:
+                conn.execute("UPDATE dicts SET language=? WHERE id=?", (lang, dictID))
+                conn.commit()    
     elif configID == 'users':
         attachDict(dictDB, dictID)
     elif configID == "titling" or configID == "searchability" or configID == "subbing" or configID == "flagging" or configID == "links" or configID == "autonumbering":
@@ -2584,17 +2579,17 @@ def readDictHistory(dictDB: Connection, dictID: str, configs: Configs, entryID: 
     return history
 
 def verifyUserApiKey(email: str, apikey: str):
-    conn = getMainDB()
-    if email == '':
-        c = conn.execute("select email from users where apiKey=?", (apikey,))
-        row = c.fetchone()
-    else:
-        c = conn.execute("select email from users where email=? and apiKey=?", (email, apikey))
-        row = c.fetchone()
-    if not row or siteconfig["readonly"]:
-        return {"valid": False}
-    else:
-        return {"valid": True, "email": email or ""}
+    with getMainDB() as conn:
+        if email == '':
+            c = conn.execute("select email from users where apiKey=?", (apikey,))
+            row = c.fetchone()
+        else:
+            c = conn.execute("select email from users where email=? and apiKey=?", (email, apikey))
+            row = c.fetchone()
+        if not row or siteconfig["readonly"]:
+            return {"valid": False}
+        else:
+            return {"valid": True, "email": email or ""}
 
 def links_add(source_dict: str, source_el: str, source_id: str, target_dict: str, target_el: str, target_id: str, confidence: float=0, conn: Optional[Connection]=None):
     if not conn:
@@ -2881,11 +2876,11 @@ def notifyUsers(configOld: ConfigUsers, configNew: ConfigUsers, dictInfo: Config
 
 def changeFavDict(userEmail: str, dictID: str, status: Literal["true"]):
     if userEmail != '' and dictID != '':
-        conn = getMainDB()
-        conn.execute("DELETE FROM dict_fav WHERE user_email=? AND dict_id=?", (userEmail, dictID))
-        if status == 'true':
-            conn.execute("INSERT INTO dict_fav VALUES (?, ?)", (dictID, userEmail))
-        conn.commit()
+        with getMainDB() as conn:
+            conn.execute("DELETE FROM dict_fav WHERE user_email=? AND dict_id=?", (userEmail, dictID))
+            if status == 'true':
+                conn.execute("INSERT INTO dict_fav VALUES (?, ?)", (dictID, userEmail))
+            conn.commit()
     return True
 
 def get_iso639_1() -> List[IsoCode]:

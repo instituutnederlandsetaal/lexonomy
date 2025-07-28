@@ -91,11 +91,25 @@ def profiler(callback):
 install(profiler)
 
 # authentication decorator
-# use @authDict(["canEdit", "canConfig", "canUpload", "canDownload"]) before any handler
-# to ensure that user has appropriate access to the dictionary. Empty list checks read access only.
-# assumes <dictID> in route and "dictID", "user", "dictDB", "configs" as parameters in the decorated function
-# <dictID> gets open and passed as dictDB alongside the configs
 def authDict(checkRights: list[str], errorRedirect: bool=False):
+    """
+    Decorator factory for authenticating user access to a dictionary and verifying required rights.
+    Args:
+        checkRights (list[str]): List of required rights to check for the user. Available rights to check are the fields in the ConfigUsersUser dict
+            - (e.g., "canEdit", "canConfig", "canUpload", "canDownload").
+        errorRedirect (bool, optional): If True, redirects to the dictionary page on insufficient rights.
+            If False, returns the rights result dictionary. Defaults to False.
+    Raises:
+        404: If the dictionary does not exist.
+        Redirect: If errorRedirect is True and the user lacks required rights.
+    Usage:
+        - @authDict(["canEdit", "canConfig", "canUpload", "canDownload"]) before any handler
+        - When used with an empty list, it checks for read access only, which is not an explicit right.
+        - The decorator requires the wrapped function have a "dictID" argument.
+        - The wrapped function must also accept "user", "dictDB", and "configs" parameters.
+        - The database connection is automatically closed after the wrapped function executes.
+    """
+    
     def wrap(func):
         @functools.wraps(func)
         def wrapper_verifyLoginAndDictAccess(*args, **kwargs):
@@ -103,24 +117,31 @@ def authDict(checkRights: list[str], errorRedirect: bool=False):
                 conn = ops.getDB(kwargs["dictID"])
             except IOError:
                 abort(404, "No such dictionary")
-            res, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, conn)
-            for r in checkRights:
-                if not res.get(r, False):
-                    if errorRedirect:
-                        redirect("/"+kwargs["dictID"])
-                    else:
-                        return res
-            kwargs["user"] = res
-            kwargs["dictDB"] = conn
-            kwargs["configs"] = configs
-            return func(*args, **kwargs)
+            try:
+                res, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, conn)
+                for r in checkRights:
+                    if not res.get(r, False):
+                        if errorRedirect:
+                            redirect("/"+kwargs["dictID"])
+                        else:
+                            return res
+                kwargs["user"] = res
+                kwargs["dictDB"] = conn
+                kwargs["configs"] = configs
+                return func(*args, **kwargs)
+            finally: 
+                conn.close()
         return wrapper_verifyLoginAndDictAccess
     return wrap
 
 # authentication decorator
 # use @auth to check that user is authenticated
-# assumes that the decorated function has a "user" parameter which is used to pass the user info
 def auth(func: Any):
+    """
+    Decorator to verify user is logged in.
+    If not logged in: redirects to the homepage ("/").
+    If logged in, user is added to the keyword arguments as 'user'.
+    """
     @functools.wraps(func)
     def wrapper_verifyLogin(*args, **kwargs):
         res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
@@ -269,12 +290,10 @@ def subget(dictID: str, user: User, dictDB: Connection, configs: Configs):
     }
 
 @post(siteconfig["rootPath"]+"<dictID>/history.json")
-def history(dictID: str):
-    if not ops.dictExists(dictID):
-        return redirect("/")
-    user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, ops.getDB(dictID))
+@authDict([])
+def history(dictID: str, dictDB: Connection, user: User, configs: Configs):
     entryID = int(request.forms.id)
-    history = ops.readDictHistory(ops.getDB(dictID), dictID, configs, entryID)
+    history = ops.readDictHistory(dictDB, dictID, configs, entryID)
     return {"history":history}
 
 @post(siteconfig["rootPath"] + "consent.json")
@@ -285,13 +304,13 @@ def save_consent(user: User):
 
 @get(siteconfig["rootPath"] + "<dictID>/getmedia/<query>")
 @authDict(["canEdit"])
-def getmedia(dictID, query, user, dictDB, configs):
+def getmedia(dictID: str, query: str, user: User, dictDB: Connection, configs: Configs):
     res = media.get_images(configs, query)
     return {"images": res}
 
 @get(siteconfig["rootPath"] + "skeget/corpora")
 @auth
-def skeget_corpora(user):
+def skeget_corpora(user: User):
     import base64
     req = urllib.request.Request("https://api.sketchengine.eu/ca/api/corpora",
                                   headers = {"Authorization": "Basic " + base64.b64encode(str.encode(str(user['ske_username'])+':'+str(user['ske_apiKey']))).decode('ascii')})
@@ -301,7 +320,7 @@ def skeget_corpora(user):
 
 @get(siteconfig["rootPath"] + "<dictID>/skeget/xampl")
 @authDict(["canEdit"])
-def skeget_xampl(dictID, user, dictDB, configs):
+def skeget_xampl(dictID: str, user: User, dictDB: Connection, configs: Configs):
     url: str = request.query.url
     url += "/first"
     url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
@@ -323,7 +342,7 @@ def skeget_xampl(dictID, user, dictDB, configs):
 
 @get(siteconfig["rootPath"] + "<dictID>/skeget/thes")
 @authDict(["canEdit"])
-def skeget_thes(dictID, user, dictDB, configs):
+def skeget_thes(dictID: str, user: User, dictDB: Connection, configs: Configs):
     url: str = request.query.url
     url += "/thes"
     url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
@@ -340,7 +359,7 @@ def skeget_thes(dictID, user, dictDB, configs):
 
 @get(siteconfig["rootPath"] + "<dictID>/skeget/collx")
 @authDict(["canEdit"])
-def skeget_collx(dictID, user, dictDB, configs):
+def skeget_collx(dictID: str, user: User, dictDB: Connection, configs: Configs):
     url: str = request.query.url
     url += "/wsketch"
     url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
@@ -671,43 +690,35 @@ def dictread(user: User):
 
 @get(siteconfig["rootPath"]+"<dictID>/config.json")
 def dictconfig(dictID: str):
-    if not ops.dictExists(dictID):
-        if dictID == 'BABELNET':
-            return {"success": True, "publicInfo": {"title": "BABELNET"}}
-        else:
-            return {"success": False}
-    else:
-        user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, ops.getDB(dictID))
-        doctypes = [configs["xema"]["root"]] + list(configs["subbing"].keys()) + ops.readDoctypesUsed(ops.getDB(dictID))
-        doctypes = list(set(doctypes))
-        res = {"success": True, "publicInfo": {**configs["ident"], **configs["publico"]}, "userAccess": user["dictAccess"], "configs": {"xema": configs["xema"], "xemplate": configs["xemplate"], "kex": configs["kex"], "kontext": configs["kontext"], "subbing": configs["subbing"], "xampl": configs["xampl"], "thes": configs["thes"], "collx": configs["collx"], "defo": configs["defo"], "titling": configs["titling"], "flagging": configs["flagging"], "linking": configs["links"], "editing": configs["editing"], "metadata": configs["metadata"], "gapi": configs["gapi"]}, "doctype": configs["xema"]["root"], "doctypes": doctypes}
-        res["publicInfo"]["blurb"] = ops.markdown_text(str(configs["ident"]["blurb"] or ""))
-        return res
-
-@get(siteconfig["rootPath"]+"<dictID>/doctype.json")
-def dictconfig(dictID: str):
-    if not ops.dictExists(dictID):
+    if dictID == 'BABELNET':
+        return {"success": True, "publicInfo": {"title": "BABELNET"}}
+    elif not ops.dictExists(dictID):
         return {"success": False}
     else:
-        user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, ops.getDB(dictID))
-        doctypes = [configs["xema"]["root"]] + list(configs["subbing"].keys())
-        doctypes = list(set(doctypes))
-        res = {"success": True, "doctype": configs["xema"]["root"], "doctypes": doctypes, "userAccess": user["dictAccess"]}
-        return res
+        with ops.getDB(dictID) as dictDB:
+            user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, dictDB)
+            doctypes = [configs["xema"]["root"]] + list(configs["subbing"].keys()) + ops.readDoctypesUsed(dictDB)
+            doctypes = list(set(doctypes))
+            res = {"success": True, "publicInfo": {**configs["ident"], **configs["publico"]}, "userAccess": user["dictAccess"], "configs": {"xema": configs["xema"], "xemplate": configs["xemplate"], "kex": configs["kex"], "kontext": configs["kontext"], "subbing": configs["subbing"], "xampl": configs["xampl"], "thes": configs["thes"], "collx": configs["collx"], "defo": configs["defo"], "titling": configs["titling"], "flagging": configs["flagging"], "linking": configs["links"], "editing": configs["editing"], "metadata": configs["metadata"], "gapi": configs["gapi"]}, "doctype": configs["xema"]["root"], "doctypes": doctypes}
+            res["publicInfo"]["blurb"] = ops.markdown_text(str(configs["ident"]["blurb"] or ""))
+            return res
+
+@get(siteconfig["rootPath"]+"<dictID>/doctype.json")
+@authDict([])
+def dictconfig(dictID: str, user: User, dictDB: Connection, configs: Configs):
+    doctypes = [configs["xema"]["root"]] + list(configs["subbing"].keys())
+    doctypes = list(set(doctypes))
+    return {"success": True, "doctype": configs["xema"]["root"], "doctypes": doctypes, "userAccess": user["dictAccess"]}
 
 @get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>/nabes.json")
-def publicentrynabes(dictID: str, entryID: int):
-    dictDB = ops.getDB(dictID)
-    user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, dictDB)
+@authDict([])
+def publicentrynabes(dictID: str, entryID: int, user: User, dictDB: Connection, configs: Configs):
     nabes = ops.readNabesByEntryID(dictDB, dictID, entryID, configs)
     return {"nabes": nabes}
 
 @get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>.xml")
-def publicentryxml(dictID: str, entryID: int):
-    if not ops.dictExists(dictID):
-        return redirect("/")
-    dictDB = ops.getDB(dictID)
-    user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, dictDB)
+@authDict([], True)
+def publicentryxml(dictID: str, entryID: int, user: User, dictDB: Connection, configs: Configs):
     if not configs["publico"]["public"]:
         return redirect("/"+dictID)
     if not "licence" in configs["publico"] or not siteconfig["licences"][configs["publico"]["licence"]]["canDownloadXml"]:
@@ -722,12 +733,12 @@ def publicentryxml(dictID: str, entryID: int):
 def publicrandom(dictID: str):
     if not ops.dictExists(dictID):
         return redirect("/")
-    dictDB = ops.getDB(dictID)
-    configs = ops.readDictConfigs(dictDB)
-    if not configs["publico"]["public"]:
-        return {"more": False, "entries": []}
-    res = ops.readRandoms(dictDB)
-    return res
+    with ops.getDB(dictID) as dictDB:
+        configs = ops.readDictConfigs(dictDB)
+        if not configs["publico"]["public"]:
+            return {"more": False, "entries": []}
+        res = ops.readRandoms(dictDB)
+        return res
 
 @post(siteconfig["rootPath"]+"<dictID>/randomone.json")
 @authDict(["canConfig"])
@@ -790,19 +801,19 @@ def entrylist(dictID: str, doctype: str, user: User, dictDB: Connection, configs
 
 @post(siteconfig["rootPath"]+"<dictID>/search.json")
 def publicsearch(dictID: str):
-    dictDB = ops.getDB(dictID)
-    configs = ops.readDictConfigs(dictDB)
-    if not configs["publico"]["public"]:
-        return {"success": False}
+    with ops.getDB(dictID) as dictDB:
+        configs = ops.readDictConfigs(dictDB)
+        if not configs["publico"]["public"]:
+            return {"success": False}
 
-    modifier = request.forms.modifier or "start"
-    howmany = request.forms.howmany or 100
-    searchtext = request.forms.searchtext
-    searchflag = request.forms.searchflag
-    doctype = configs['xema']['root']
+        modifier = request.forms.modifier or "start"
+        howmany = request.forms.howmany or 100
+        searchtext = request.forms.searchtext
+        searchflag = request.forms.searchflag
+        doctype = configs['xema']['root']
 
-    total, entryIds = ops.searchEntries(dictDB, configs, doctype, searchflag, searchtext, modifier, False, limit = howmany)
-    return {"success": True, "entries": ops.readEntries(dictDB, configs, entryIds, titlePlain=True), "total": total}
+        total, entryIds = ops.searchEntries(dictDB, configs, doctype, searchflag, searchtext, modifier, False, limit = howmany)
+        return {"success": True, "entries": ops.readEntries(dictDB, configs, entryIds, titlePlain=True), "total": total}
 
 
 @post(siteconfig["rootPath"]+"<dictID>/configread.json")
@@ -891,12 +902,9 @@ def ontolex(dictID: str, doctype: str):
     user = ops.verifyUserApiKey(data["email"], data["apikey"])
     if not user["valid"]:
         return {"success": False}
-    else:
-        if data.get("search"):
-            search = data["search"]
-        else:
-            search = ""
-        dictDB = ops.getDB(dictID)
+    
+    search = data.get("search", "")
+    with ops.getDB(dictID) as dictDB:
         configs = ops.readDictConfigs(dictDB)
         dictAccess = configs["users"].get(user["email"]) or user["email"] in siteconfig["admins"]
         if not dictAccess:
@@ -978,18 +986,18 @@ def pushapi():
                 return {"success": False}
             else:
                 if dictFormat == "push":
-                    dictDB = ops.getDB(dictID)
-                    configs = ops.readDictConfigs(dictDB)
-                    if configs["xema"]["elements"].get("partOfSpeech"):
-                        for pos in poses:
-                            configs["xema"]["elements"]["partOfSpeech"]["values"].append({"value": pos, "caption": ""})
-                    if configs["xema"]["elements"].get("collocatePartOfSpeech"):
-                        for pos in poses:
-                            configs["xema"]["elements"]["collocatePartOfSpeech"]["values"].append({"value": pos, "caption":""})
-                    if configs["xema"]["elements"].get("label"):
-                        for label in labels:
-                            configs["xema"]["elements"]["label"]["values"].append({"value":label, "caption": ""})
-                    ops.updateDictConfig(dictDB, dictID, "xema", configs["xema"])
+                    with ops.getDB(dictID) as dictDB:
+                        configs = ops.readDictConfigs(dictDB)
+                        if configs["xema"]["elements"].get("partOfSpeech"):
+                            for pos in poses:
+                                configs["xema"]["elements"]["partOfSpeech"]["values"].append({"value": pos, "caption": ""})
+                        if configs["xema"]["elements"].get("collocatePartOfSpeech"):
+                            for pos in poses:
+                                configs["xema"]["elements"]["collocatePartOfSpeech"]["values"].append({"value": pos, "caption":""})
+                        if configs["xema"]["elements"].get("label"):
+                            for label in labels:
+                                configs["xema"]["elements"]["label"]["values"].append({"value":label, "caption": ""})
+                        ops.updateDictConfig(dictDB, dictID, "xema", configs["xema"])
                 return {"success": True, "dictID": dictID}
         elif data["command"] == "listDicts":
             dicts = ops.getDictsByUser(user["email"])
@@ -997,17 +1005,17 @@ def pushapi():
         elif data["command"] == "createEntries":
             dictID = data["dictID"]
             entryXmls = data["entryXmls"]
-            dictDB = ops.getDB(dictID)
-            configs = ops.readDictConfigs(dictDB)
-            dictAccess = configs["users"].get(user["email"])
-            if dictAccess and (dictAccess["canEdit"] or dictAccess["canUpload"]):
-                for entry in entryXmls:
-                    if data.get("format") == "teilex0":
-                        entry = ops.preprocessLex0(entry)
-                    ops.createEntry(dictDB, configs, None, entry, user["email"], {"apikey": data["apikey"]})
-                return {"success": True}
-            else:
-                return {"success": False}
+            with ops.getDB(dictID) as dictDB:
+                configs = ops.readDictConfigs(dictDB)
+                dictAccess = configs["users"].get(user["email"])
+                if dictAccess and (dictAccess["canEdit"] or dictAccess["canUpload"]):
+                    for entry in entryXmls:
+                        if data.get("format") == "teilex0":
+                            entry = ops.preprocessLex0(entry)
+                        ops.createEntry(dictDB, configs, None, entry, user["email"], {"apikey": data["apikey"]})
+                    return {"success": True}
+                else:
+                    return {"success": False}
         else:
             return {"success": False}
 
@@ -1082,13 +1090,11 @@ def linkNaisc(dictID, user, dictDB, configs):
     otherdictID = request.query.otherdictID
     if dictID == otherdictID:
         abort(400, "Linking dictionary to the same dictionary does not make any sense")
-    try:
-        otherconn = ops.getDB(otherdictID)
-    except IOError:
-        abort(404, "No such dictionary")
-    _res, otherconfigs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, otherconn)
-    res = ops.linkNAISC(dictDB, dictID, configs, otherconn, otherdictID, otherconfigs)
-    return res
+    
+    with ops.getDB(otherdictID) as otherconn:
+        _res, otherconfigs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, otherconn)
+        res = ops.linkNAISC(dictDB, dictID, configs, otherconn, otherdictID, otherconfigs)
+        return res
 
 @get(siteconfig["rootPath"]+"<dictID>/naiscprogress.json")
 @authDict([])

@@ -13,6 +13,7 @@ import hashlib
 import random
 import string
 import smtplib, ssl
+from email.message import EmailMessage
 from typing import Any, Callable, Iterable, List, Literal, Optional, Tuple, TypedDict, Union, Set
 from typing_extensions import NotRequired
 import urllib
@@ -388,8 +389,15 @@ def sendmail(mailTo: str, mailSubject: str, mailText: str):
             server = smtplib.SMTP_SSL(siteconfig["mailconfig"]["host"], siteconfig["mailconfig"]["port"], context=context)
         else:
             server = smtplib.SMTP(siteconfig["mailconfig"]["host"], siteconfig["mailconfig"]["port"])
-        message = "Subject: " + mailSubject + "\n\n" + mailText
-        server.sendmail(siteconfig["mailconfig"]["from"], mailTo, message)
+        
+        # Create RFC 5322 compliant message with proper headers
+        msg = EmailMessage()
+        msg['Subject'] = mailSubject
+        msg['From'] = siteconfig["mailconfig"]["from"]
+        msg['To'] = mailTo
+        msg.set_content(mailText)
+        
+        server.send_message(msg)
         server.quit()
 
 

@@ -1,0 +1,80 @@
+<dict-entry-pagination>
+   <div class="paginationWrapper" if={shouldShowPagination()}>
+      <button class="btn-small btn-flat" 
+            onclick={store.previousPage.bind(store)}
+            disabled={dictData.currentPage <= 1}>
+         <i class="material-symbols-outlined">chevron_left</i>
+      </button>
+      <span class="paginationInfo">{getPaginationText()}</span>
+      <button class="btn-small btn-flat" 
+            onclick={store.nextPage.bind(store)}
+            disabled={dictData.currentPage >= getTotalPages()}>
+         <i class="material-symbols-outlined">chevron_right</i>
+      </button>
+   </div>
+   <div class="entriesCountInfo" if={!shouldShowPagination()}>
+      {getEntriesCountText()}
+   </div>
+
+   <style>
+      :host{
+         display: block;
+      }
+      .paginationWrapper{
+         display: flex;
+         align-items: center;
+         justify-content: center;
+         gap: 8px;
+      }
+      .paginationWrapper .btn-small {
+         padding: 0 8px;
+         min-width: auto;
+         height: 24px;
+         line-height: 24px;
+      }
+      .paginationWrapper .btn-small i{
+         font-size: 1.2rem;
+      }
+      .paginationWrapper .btn-small:disabled{
+         color: #ccc;
+         cursor: not-allowed;
+      }
+      .paginationInfo{
+         font-size: 0.85rem;
+         color: #666;
+         white-space: nowrap;
+      }
+      .entriesCountInfo{
+         font-size: 0.85rem;
+         color: #b8b8b8;
+         text-align: center;
+      }
+   </style>
+
+   <script>
+      export default {
+         shouldShowPagination(){
+            return this.getTotalPages() > 1
+         },
+
+         getTotalPages(){
+            let entriesPerPage = this.dictData.dictConfigs.titling.numberEntries || 1000
+            return Math.ceil(this.dictData.entryCount / entriesPerPage)
+         },
+
+         getPaginationText(){
+            if(this.dictData.entryCount === 0) return '0 entries'
+            
+            let entriesPerPage = this.dictData.dictConfigs.titling.numberEntries || 1000
+            let start = (this.dictData.currentPage - 1) * entriesPerPage + 1
+            let end = Math.min(this.dictData.currentPage * entriesPerPage, this.dictData.entryCount)
+            return `${start}-${end} of ${this.dictData.entryCount}`
+         },
+
+         getEntriesCountText(){
+            if(this.dictData.entryCount === 0) return '0 entries'
+            return `${this.dictData.entryCount} entries`
+         }
+      }
+   </script>
+</dict-entry-pagination>

@@ -32,6 +32,7 @@ import dict_config_kontext from './riot/dict-config-kontext.riot'
 import dict_config_links from './riot/dict-config-links.riot'
 import dict_nav from './riot/dict-nav.riot'
 import dict_entry_filter from './riot/dict-entry-filter.riot'
+import dict_entry_pagination from './riot/dict-entry-pagination.riot'
 import dict_config_buttons from './riot/dict-config-buttons.riot'
 import dict_config_publico from './riot/dict-config-publico.riot'
 import dict_config_searchability from './riot/dict-config-searchability.riot'
@@ -87,6 +88,7 @@ riot_register('dict-config-kontext', dict_config_kontext)
 riot_register('dict-config-links', dict_config_links)
 riot_register('dict-nav', dict_nav)
 riot_register('dict-entry-filter', dict_entry_filter)
+riot_register('dict-entry-pagination', dict_entry_pagination)
 riot_register('dict-config-buttons', dict_config_buttons)
 riot_register('dict-config-publico', dict_config_publico)
 riot_register('dict-config-searchability', dict_config_searchability)

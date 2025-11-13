@@ -83,12 +83,29 @@ class StoreClass {
    }
 
    searchEntryList(){
+      this.data.currentPage = 1
       this.loadEntryList()
       url.setQuery(this.data.searchtext ? {
          s: this.data.searchtext,
          m: this.data.modifier,
          f: this.data.searchflag
       } : {}, true)
+   }
+
+   nextPage(){
+      let entriesPerPage = this.data.dictConfigs.titling.numberEntries || 1000
+      let totalPages = Math.ceil(this.data.entryCount / entriesPerPage)
+      if(this.data.currentPage < totalPages){
+         this.data.currentPage++
+         this.loadEntryList()
+      }
+   }
+
+   previousPage(){
+      if(this.data.currentPage > 1){
+         this.data.currentPage--
+         this.loadEntryList()
+      }
    }
 
    setEntryFlag(entryId, flag){
@@ -165,6 +182,7 @@ class StoreClass {
          searchflag: '',
          modifier: 'start',
          mode: 'view',
+         currentPage: 1,
          userAccess: {
             canEdit: false,
             canConfig: false,
@@ -287,11 +305,14 @@ class StoreClass {
       this.data.isEntryListLoading = true
       this.trigger("entryListLoadingChanged")
       let url;
+      let entriesPerPage = howmany ? howmany : (this.data.dictConfigs.titling.numberEntries || 1000)
+      let offset = (this.data.currentPage - 1) * entriesPerPage
       let data = {
          searchtext: this.data.searchtext,
          modifier: this.data.modifier,
          searchflag: this.data.searchflag,
-         howmany: howmany ? howmany : (this.data.dictConfigs.titling.numberEntries || 1000)
+         howmany: entriesPerPage,
+         offset: offset
       }
       if(authorized && this.data.userAccess.canEdit){
          url = `${window.API_URL}${this.data.dictId}/${this.data.doctype}/entrylist.json`

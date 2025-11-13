@@ -795,7 +795,8 @@ def entrylist(dictID: str, doctype: str, user: User, dictDB: Connection, configs
             return {"success": True, "entries": entries}
     else:
         howmany = int(request.forms.howmany) if request.forms.howmany else 100
-        total, entryIds = ops.searchEntries(dictDB, configs, doctype, request.forms.searchflag, request.forms.searchtext, request.forms.modifier, request.forms.sortdesc, limit = howmany)
+        offset = int(request.forms.offset) if request.forms.offset else 0
+        total, entryIds = ops.searchEntries(dictDB, configs, doctype, request.forms.searchflag, request.forms.searchtext, request.forms.modifier, request.forms.sortdesc, limit = howmany, offset = offset)
         entries = ops.readEntries(dictDB, configs, entryIds, xml=False, sortdesc=request.forms.sortdesc)
         return {"success": True, "entries": entries, "total": total}
 
@@ -808,11 +809,12 @@ def publicsearch(dictID: str):
 
         modifier = request.forms.modifier or "start"
         howmany = request.forms.howmany or 100
+        offset = int(request.forms.offset) if request.forms.offset else 0
         searchtext = request.forms.searchtext
         searchflag = request.forms.searchflag
         doctype = configs['xema']['root']
 
-        total, entryIds = ops.searchEntries(dictDB, configs, doctype, searchflag, searchtext, modifier, False, limit = howmany)
+        total, entryIds = ops.searchEntries(dictDB, configs, doctype, searchflag, searchtext, modifier, False, limit = howmany, offset = offset)
         return {"success": True, "entries": ops.readEntries(dictDB, configs, entryIds, titlePlain=True), "total": total}
 
 

@@ -20,15 +20,9 @@
       <div id="dictEditContainer" >
          <div class="dictLeftCol"
                style="width: max({dictData.config.flagging.flags.length ? '25vw' : '20vw'}, 250px);">
-            <div if={dictData.isEntryListLoading}>
-               <loading-overlay/>
-            </div>
             <template if={dictData.isEntryListLoaded}>
                <dict-entry-filter search-func={store.searchEntryList.bind(store)}/>
-               <div if={dictData.entryCount > dictData.entryList.length}
-                     class="entriesCountInfo">
-                  Showing {dictData.entryList.length} of {dictData.entryCount} entries.
-               </div>
+               <dict-entry-pagination/>
                <div class="entry-list collection">
                   <div each={ (entry, idx) in dictData.entryList }
                         data-idx={idx}
@@ -70,6 +64,7 @@
                   </li>
                </ul>
             </template>
+            <loading-overlay if={dictData.isEntryListLoading}/>
          </div>
          <div class="resizeHandle"
                onmousedown={onResizeHandleMouseDown}></div>
@@ -110,19 +105,19 @@
       .entry-list {
          max-height: 80vh;
          overflow-y: auto;
+         margin: 0;
       }
       .dictLeftCol{
          min-width: 200px;
          min-height: 50vh;
          position: relative;
+         display: flex;
+         flex-direction: column;
+         gap: 0.25rem;
       }
       .dictRightCol{
          min-width: 500px;
          flex: 1;
-      }
-      .entriesCountInfo{
-         font-size: 0.85rem;
-         color: #b8b8b8;
       }
       .collection-item{
          position: relative;

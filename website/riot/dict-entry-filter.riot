@@ -1,71 +1,189 @@
 <dict-entry-filter>
    <div class="filterForm">
-      <span class="searchBox">
-         <input type="text"
-               id="searchBox"
-               placeholder="search"
-               class="input-field"
-               value={dictData.searchtext}
-               onkeyup={ onKeyUp }/>
-         <i onclick={onClearFilterClick}
-            class="material-symbols-outlined clearFilterIcon grey-text clickable">close</i>
-      </span>
-      <select id="searchType">
-         <option value="start" selected={!dictData.modifier || dictData.modifier == 'start'}>starts like this</option>
-         <option value="exact" selected={dictData.modifier == 'exact'}>is exactly</option>
-         <option value="wordstart" selected={dictData.modifier == 'wordstart'}>contains a word that starts like this</option>
-         <option value="substring" selected={dictData.modifier == 'substring'}>contains this sequence of characters</option>
-      </select>
-      <select id="flagType" if="{store.data && store.data.config && store.data.config.flagging.flags.length}">
-         <option selected={!dictData.searchflag} value="">Any flag</option>
-         <option each={flag in store.data.config.flagging.flags} 
-            selected={dictData.searchflag === flag.name}
-            value="{flag.name}"
-         ><span><span class="flag-dot" style="background: {flag.color};"></span> {flag.label}</span></option>
-      </select>
+      <input type="text"
+            id="searchBox"
+            placeholder="search"
+            class="input-field"
+            value={dictData.searchtext}
+            onkeyup={ onKeyUp }/>
+      <i onclick={onClearFilterClick}
+         class="material-symbols-outlined clearFilterIcon grey-text clickable">close</i>
+      
+      <button class="dropdown-btn {dictData.modifier !== 'start' ? 'active' : ''}" onclick={toggleSearchTypeDropdown}>
+         <i class="material-symbols-outlined">filter_list</i>
+         <span if={dictData.modifier !== 'start'} class="active-badge">•</span>
+      </button>
+      <ul class="custom-dropdown" show={state.showSearchType}>
+         <li each={option in searchTypeOptions}
+             class="{dictData.modifier === option.value ? 'active' : ''}"
+             onclick={selectSearchType.bind(this, option.value)}>
+            {option.label}
+         </li>
+      </ul>
+      
+      <button if="{store.data && store.data.config && store.data.config.flagging.flags.length}"
+              class="dropdown-btn {dictData.searchflag ? 'active' : ''}" onclick={toggleFlagDropdown}>
+         <i class="material-symbols-outlined">label</i>
+         <span if={dictData.searchflag} class="active-badge">•</span>
+      </button>
+      <ul if="{store.data && store.data.config && store.data.config.flagging.flags.length}"
+          class="custom-dropdown" show={state.showFlag}>
+         <li class="{!dictData.searchflag ? 'active' : ''}"
+             onclick={selectFlag.bind(this, '')}>
+            <i class="material-symbols-outlined grey-text">label_outline</i>
+            <span>Any flag</span>
+         </li>
+         <li each={flag in store.data.config.flagging.flags}
+             class="{dictData.searchflag === flag.name ? 'active' : ''}"
+             onclick={selectFlag.bind(this, flag.name)}>
+            <span class="flag-dot" style="background: {flag.color};"></span>
+            <span>{flag.label}</span>
+         </li>
+      </ul>
    </div>
 
    <style>
       :host{
          display: block;
+         position: relative;
       }
       .filterForm{
          display: flex;
-         gap: 10px;
-      }
-      .filterForm .searchBox{
-         width: 100px;
          position: relative;
-         flex: 2;
+         border: 1px solid #9e9e9e;
+         height: 42px;
       }
-      .filterForm .searchBox input{
-         padding-right: 27px;
+      .filterForm input{
+         flex: 1;
+         border: none !important;
+         border-radius: 0 !important;
+         margin: 0 !important;
+         height: 100% !important;
+         box-shadow: none !important;
+         padding-left: 10px !important;
+         padding-right: 35px !important;
       }
-      .filterForm > .select-wrapper{
-         flex: 3;
+      .filterForm input:focus{
+         border: none !important;
+         box-shadow: none !important;
       }
-      .filterForm .clearFilterIcon{
+      .clearFilterIcon{
          position: absolute;
-         right: 5px;
-         top: 11px;
+         right: 95px;
+         top: 9px;
+         cursor: pointer;
+         font-size: 1.3rem;
+         z-index: 1;
+      }
+      .dropdown-btn{
+         background: #f5f5f5;
+         border: none;
+         border-left: 1px solid #9e9e9e;
+         width: 42px;
+         height: 100%;
+         cursor: pointer;
+         display: flex;
+         align-items: center;
+         justify-content: center;
+         transition: background-color 0.2s;
+         padding: 0;
+         margin: 0;
+         position: relative;
+      }
+      .dropdown-btn:hover{
+         background: #e0e0e0;
+      }
+      .dropdown-btn.active{
+         background: #e3f2fd;
+         border-left-color: #2196f3;
+      }
+      .dropdown-btn.active i{
+         color: #1976d2;
+      }
+      .dropdown-btn i{
+         font-size: 1.3rem;
+         color: #666;
+      }
+      .active-badge{
+         position: absolute;
+         top: 6px;
+         right: 6px;
+         width: 12px;
+         height: 12px;
+         background: #ff5722;
+         border-radius: 50%;
+         display: flex;
+         align-items: center;
+         justify-content: center;
+         font-size: 14px;
+         line-height: 1;
+         color: white;
+         font-weight: bold;
+         pointer-events: none;
+      }
+      .custom-dropdown{
+         position: absolute;
+         top: 100%;
+         right: 0;
+         background: white;
+         border: 1px solid #e0e0e0;
+         border-radius: 4px;
+         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+         list-style: none;
+         margin: 4px 0 0 0;
+         padding: 4px 0;
+         z-index: 1000;
+         min-width: 200px;
+         max-width: 300px;
+         display: none;
+      }
+      .custom-dropdown[show="true"]{
+         display: block;
+      }
+      .custom-dropdown li{
+         padding: 8px 16px;
+         cursor: pointer;
+         transition: background-color 0.2s;
+         display: flex;
+         align-items: center;
+         gap: 8px;
+         white-space: nowrap;
+      }
+      .custom-dropdown li:hover{
+         background: #f5f5f5;
+      }
+      .custom-dropdown li.active{
+         background: #e3f2fd;
+         font-weight: 500;
+      }
+      .custom-dropdown li i{
+         font-size: 1.2rem;
       }
       .flag-dot {
          width: 1em;
          height: 1em;
-         content: " ";
          display: inline-block;
          border-radius: 100%;
-         vertical-align: middle;
-         margin-right: 0.5em;
+         flex-shrink: 0;
       }
    </style>
 
    <script>
       export default {
+         state: {
+            showSearchType: false,
+            showFlag: false
+         },
+
+         searchTypeOptions: [
+            { value: 'start', label: 'starts like this' },
+            { value: 'exact', label: 'is exactly' },
+            { value: 'wordstart', label: 'contains a word that starts like this' },
+            { value: 'substring', label: 'contains this sequence of characters' }
+         ],
+
          search() {
             this.dictData.searchtext = $('#searchBox').val()
-            this.dictData.modifier = $('#searchType').val()
-            this.dictData.searchflag = $('#flagType').val()
             this.props.searchFunc()
          },
 
@@ -82,26 +200,50 @@
             }
          },
 
-         initSelect(){
-            $('select').off("change")
-                  .formSelect({
-                     dropdownOptions: {
-                        coverTrigger: false,
-                        constrainWidth: false
-                     }
-                  })
-                  .on("change", () => {
+         toggleSearchTypeDropdown(evt){
+            evt.stopPropagation()
+            this.state.showSearchType = !this.state.showSearchType
+            this.state.showFlag = false
+            this.update()
+         },
 
-                     $('#searchBox').val() && this.search()
-                  })
+         toggleFlagDropdown(evt){
+            evt.stopPropagation()
+            this.state.showFlag = !this.state.showFlag
+            this.state.showSearchType = false
+            this.update()
+         },
+
+         selectSearchType(value, evt){
+            evt.stopPropagation()
+            this.dictData.modifier = value
+            this.state.showSearchType = false
+            this.update()
+            this.search()
+         },
+
+         selectFlag(value, evt){
+            evt.stopPropagation()
+            this.dictData.searchflag = value
+            this.state.showFlag = false
+            this.update()
+            this.search()
+         },
+
+         closeDropdowns(){
+            if(this.state.showSearchType || this.state.showFlag){
+               this.state.showSearchType = false
+               this.state.showFlag = false
+               this.update()
+            }
          },
 
          onMounted(){
-            this.initSelect()
+            document.addEventListener('click', this.closeDropdowns)
          },
 
-         onUpdated(){
-            this.initSelect()
+         onBeforeUnmount(){
+            document.removeEventListener('click', this.closeDropdowns)
          }
       }
    </script>

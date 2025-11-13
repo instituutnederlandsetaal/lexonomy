@@ -616,6 +616,7 @@ def searchEntries(
     modifier: Optional[Literal["start", "wordstart", "substring", "exact"]] = "start",
     sortdesc: Union[str, bool] = False,
     limit: Optional[int] = None,
+    offset: int = 0,
 ) -> Tuple[int, List[SortableEntry]]:
     """Retrieve entries sorted by sortkey. Optionally filtered by their headword.
 
@@ -628,6 +629,7 @@ def searchEntries(
         modifier (Optional[Literal["start", "wordstart", "substring", "exact"]], optional): Defaults to "start".
         sortdesc (Union[bool, str], optional): Reverse the usual sort order? The usual sort order is determined by ConfigTitling["sortDesc"]
         limit (Optional[int], optional): Limit the returned results to this number (when > 0)
+        offset (int, optional): Skip this many results before returning. Defaults to 0.
     Returns:
         Tuple[int, List[SortableEntry]]: the total number of results, and the limited list of results.
     """
@@ -640,18 +642,6 @@ def searchEntries(
         sortdesc = sortdesc == "true"
     if configs["titling"].get("sortDesc", False): # if default sort is inverted also invert descending
         sortdesc = not sortdesc
-
-    # Special case: when searching wildcard (i.e. retrieve all entries) and the dictionary is large (>2000) entries.
-    # Don't read all entries before sorting and limiting, but use a shorter path.
-    if not searchtext or not modifier:
-        params = (doctype, flag) if flag else (doctype, )
-        total = dictDB.execute(f"select count(*) as total from entries where doctype = ? {'and flag = ?' if flag else ''}", params).fetchone()["total"]
-        if total > 2000:
-            results: list[SortableEntry] = []
-            for rf in dictDB.execute(f"select id, sortkey from entries where doctype = ? {'and flag = ?' if flag else ''} order by sortkey limit 200", params).fetchall():
-                results.append({"id": rf["id"], "sortkey": rf["sortkey"]})
-            sortEntries(configs, results, reverse=sortdesc)
-            return total, results
 
     where = " where doctype = ? "
     params = (doctype, )
@@ -683,7 +673,9 @@ def searchEntries(
     results = sortEntries(configs, results, reverse=sortdesc)
     total = len(results)
     if (limit is not None and int(limit) > 0):
-        results = results[0:int(limit)]
+        results = results[offset:offset + int(limit)]
+    elif offset > 0:
+        results = results[offset:]
     return total, results
 
 def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int], List[SortableEntry]], xml: bool=True, tag: bool=False, html: bool=False, titlePlain: bool = False, sortdesc: Union[str, bool] = False) -> List[EntryFromDatabase]:

@@ -108,6 +108,7 @@ def authDict(checkRights: list[str], errorRedirect: bool=False):
         - The decorator requires the wrapped function have a "dictID" argument.
         - The wrapped function must also accept "user", "dictDB", and "configs" parameters.
         - The database connection is automatically closed after the wrapped function executes.
+        - If the wrapped function returns a generator, the connection stays open until the generator is exhausted.
     """
     
     def wrap(func):
@@ -117,6 +118,7 @@ def authDict(checkRights: list[str], errorRedirect: bool=False):
                 conn = ops.getDB(kwargs["dictID"])
             except IOError:
                 abort(404, "No such dictionary")
+            is_generator = False
             try:
                 res, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, conn)
                 for r in checkRights:
@@ -128,9 +130,22 @@ def authDict(checkRights: list[str], errorRedirect: bool=False):
                 kwargs["user"] = res
                 kwargs["dictDB"] = conn
                 kwargs["configs"] = configs
-                return func(*args, **kwargs)
-            finally: 
-                conn.close()
+                result = func(*args, **kwargs)
+                # If the result is a generator, wrap it to defer closing the connection
+                if hasattr(result, '__iter__') and hasattr(result, '__next__'):
+                    is_generator = True
+                    def generator_wrapper(gen, connection):
+                        try:
+                            yield from gen
+                        finally:
+                            connection.close()
+                    return generator_wrapper(result, conn)
+                return result
+            finally:
+                # Only close here if we didn't return a generator
+                # (generator_wrapper's finally block will close it when exhausted)
+                if not is_generator:
+                    conn.close()
         return wrapper_verifyLoginAndDictAccess
     return wrap
 

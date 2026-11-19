@@ -46,22 +46,13 @@
                // global variables used by xonomy/screenful
                xema = this.dictData.config.xema;
                xemplate = this.dictData.config.xemplate;
-               kontext = this.dictData.config.kontext;
-               kex = this.dictData.config.kex;
                subbing = this.dictData.config.subbing;
-               xampl = this.dictData.config.xampl;
-               thes = this.dictData.config.thes;
-               collx = this.dictData.config.collx;
-               defo = this.dictData.config.defo;
                titling = this.dictData.config.titling;
                flagging = this.dictData.config.flagging;
                linking = this.dictData.config.linking;
                editing = this.dictData.config.editing;
-               gapi = this.dictData.config.gapi;
                dictId = this.dictData.dictId;
                userDicts = this.dictData.dictionaryList;
-               ske_username = this.authData.ske_username;
-               ske_apiKey = this.authData.ske_apiKey;
 
                var customizeEditor = "";
                var usingOwnEditor = false;
@@ -84,7 +75,6 @@
                         entry.contentHtml = Xemplatron.xml2html(doc, xemplate, xema);
                      }
                      $(div).addClass("viewer").html(entry.contentHtml);
-                     Gmedia.addVoice(entry);
                      $(div).find("a.xref").on("click", function (e) {
                         var text = $(e.delegateTarget).attr("data-text");
                         window.parent.$("#searchBox").val(text);
@@ -150,8 +140,6 @@
                      Xonomy.setMode(editing["xonomyMode"])
                   }
                   Xrefs.extendDocspec(docSpec, xema);
-                  Ske.extendDocspec(docSpec, xema);
-                  Kontext.extendDocspec(docSpec, xema);
                   Sub.extendDocspec(docSpec, xema, entry);
                   docSpec.onchange = Screenful.Editor.changed;
                   if (uneditable) {
@@ -180,7 +168,6 @@
                         Xonomy.render((entry ? entry.content : newXml), div, docSpec);
                      }
                      if (!Xonomy.keyNav) Xonomy.startKeyNav($("#container")[0], document.getElementById("container"));
-                     Gmedia.addVoice();
                   } else {
                      customizeEditor.editor(div, entry ? entry : {content: newXml, id: 0}, uneditable);
                   }
@@ -226,14 +213,13 @@
                Screenful.History.printAction = function (revision) {
                   var content = "";
                   //actions: delete | create | update | purge
-                  //historiography: {apikey: apikey} | {uploadStart: uploadStart, filename: filename}
                   content += "<div style='white-space: nowrap'>";
                   if (revision.action == "create") content += "<b>Created</b>";
                   else if (revision.action == "update") content += "<b>Changed</b>";
                   else if (revision.action == "delete") content += "<b>Deleted</b>";
                   else if (revision.action == "purge") content += "<b>Bulk-deleted</b>";
                   if (revision.historiography.uploadStart) content += " while uploading";
-                  if (revision.historiography.apikey) content += " through API";
+                  if (revision.historiography.viaApi) content += " through API";
                   if (revision.historiography.refactoredFrom) content += " as a subentry of <a href='javascript:void(null)' onclick='parent.Screenful.Editor.open(null, " + revision.historiography.refactoredFrom + ")'>" + revision.historiography.refactoredFrom + "</a>";
                   content += "</div>";
                   if (revision.email) content += "<div style='white-space: nowrap'><b>By:</b> " + revision.email + "</div>";

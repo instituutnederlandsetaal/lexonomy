@@ -7,7 +7,7 @@
    <div>
       <p>Elements listed here can be used as target of cross-reference link. For each element, specify unique identifier in the form of placeholders <tt>'%(element)'</tt>. Eg. element <tt>entry</tt> can have identifier <tt>%(lemma)-%(pos)</tt>, element <tt>sense</tt> can have identifier <tt>%(lemma)-%(number)</tt>. Optionally, specify element you want to show as preview when selecting links.</p>
       <template if={!state.isLoading}>
-         <table if={state.data.elements.length}>
+         <table if={state.elements.length}>
             <thead>
                <tr>
                   <th>Linking element</th>
@@ -17,7 +17,7 @@
                </tr>
             </thead>
             <tbody>
-               <tr each={ (element, idx) in state.data.elements }
+               <tr each={ (element, idx) in state.elements }
                      idx={ idx }>
                   <td>
                      <div class="input-field">
@@ -58,64 +58,6 @@
             </button>
          </div>
       </template>
-      <br><br>
-      <div>
-         <h2>Automatic linking using NAISC</h2>
-      </div>
-      <div>
-         <div>
-            <label for="otherdict">Other dictionary code</label>
-         </div>
-         <div class="input-field inlineBlock"
-               style="max-width: 400px;">
-            <input type="text"
-                  id="otherdict"/>
-         </div>
-         <div class="input-field inlineBlock">
-            <button id="naisc_link"
-                  class="btn waves-effect waves-light {state.isLinking || state.isChecking ? 'disabled' : ''}"
-                  onclick={ startLinking }
-                  style="margin-left: 10px;">Start linking</button>
-         </div>
-      </div>
-      <div if={state.info}
-            class="section">
-         <div class="message messageInfo">
-            <raw-html content={state.info}></raw-html>
-         </div>
-      </div>
-      <div>
-         <h2>Automatic linking using Babelnet</h2>
-         <p>For Babelnet linking to work, please add following element to manual linking config above (assuming TEI Lex0 format):<br/>
-            linking element: sense<br/>
-            identifier: %(@xml:id)<br/>
-            preview: %(def)
-         </p>
-         <p>Babelnet linking is done overnight. Please return tomorrow if you just started linking.</p>
-         <div if={state.data.babelnet_id == ''}>
-            <button id="babelnet_link"
-                  class="btn waves-effect waves-light"
-                  onclick={ startBabelnet }
-                  style="margin-left: 10px;">Start linking</button>
-         </div>
-         <div if={state.data.babelnet_id != ''}>
-            <p>Babelnet linking status: ({ state.data.babelnet_id }) <span id="babelnet-status"/>
-            <button id="babelnet_error"
-                  class="btn waves-effect waves-light"
-                  onclick={ clearBabelnet }
-                  style="margin-left: 10px;display:none;">Dismiss error</button>
-            <button id="babelnet_complete"
-                  class="btn waves-effect waves-light"
-                  onclick={ importBabelnet }
-                  style="margin-left: 10px;display:none;">Import links</button>
-            </p>
-            <p id="babelnet_complete_msg" style="display:none">Import of Babelnet links finished</p>
-            <button id="babelnet_finish"
-                  class="btn waves-effect waves-light"
-                  onclick={ clearBabelnet }
-                  style="margin-left: 10px;display:none;">Confirm links</button>
-         </div>
-      </div>
    </div>
 
    <style>
@@ -138,21 +80,17 @@
          state: {
             isLoading: true,
             isSaving: false,
-            isLinking: false,
-            isChecking: true,
             unusedElements: [],
-            data: {elements: [], babelnet_id: ''},
-            info: "",
-            checkDelay: 1000
+            elements: []
          },
 
          doDeleteEl(element) {
-            this.state.data.elements = this.state.data.elements.filter(val => val.linkElement != element)
+            this.state.elements = this.state.elements.filter(val => val.linkElement != element)
             this.update()
          },
 
          doAddEl(event) {
-            this.state.data.elements.push({
+            this.state.elements.push({
                linkElement: this.state.unusedElements[0],
                identifier: "", preview: ""
             })
@@ -162,27 +100,11 @@
          onMounted() {
             this.store.loadDictionaryConfig("links")
                .done(response => {
-                  if (response.content.babelnet_id != undefined) {
-                     this.state.data.babelnet_id = response.content.babelnet_id;
-                  }
-                  this.state.data.elements =Object.values(response.content).filter(el => el.linkElement != undefined);
+                  this.state.elements = Object.values(response.content).filter(el => el.linkElement != undefined)
                })
                .always(() => {
                   this.update({isLoading: false})
                })
-
-            //check NAISC status
-            this.store.linkingCheckIfRunning()
-                  .done(response => {
-                     if (response.bgjob != -1) {
-                        this.state.info = "Linking to '" + response.otherdictID + "' already in progress, please wait..."
-                        this.waitForLinking(response.otherdictID, response.bgjob)
-                     }
-                  })
-                  .always(() => {
-                     this.update({isChecking: false})
-                  })
-
          },
 
          onBeforeUpdate(){
@@ -190,20 +112,6 @@
          },
 
          onUpdated() {
-            //check Babelnet status
-            if (this.state.data.babelnet_id != '') {
-               $.post(window.API_URL + this.dictData.dictId + '/babelnet',{babelnet_id: this.state.data.babelnet_id}, (response) => {
-                  $('#babelnet-status').html(response.state)
-                  if (response.state != 'PROCESSING') {
-                     if (response.state == 'COMPLETED') {
-                        $('#babelnet_complete').show();
-                     } else {
-                        $('#babelnet_error').show();
-                     }
-                  }
-               });
-            }
-
             if (this.dictData.config.xema && this.dictData.config.xema.elements) {
                $("select").each(function(idx, el){
                   var $select = $(el)
@@ -224,108 +132,27 @@
 
          onElementChange(evt){
             var idx = $(evt.target).closest("tr").attr("idx")
-            this.state.data.elements[idx].linkElement = $(evt.target).find("option:selected").attr("value")
+            this.state.elements[idx].linkElement = $(evt.target).find("option:selected").attr("value")
             this.update()
          },
 
          onItemChange(evt){
             var idx = $(evt.target).closest("tr").attr("idx")
-            this.state.data.elements[idx][evt.target.name] = evt.target.value
+            this.state.elements[idx][evt.target.name] = evt.target.value
          },
 
          refreshUnusedElements(){
-            var savedElements = this.state.data.elements.map(e => e.linkElement)
+            var savedElements = this.state.elements.map(e => e.linkElement)
             this.state.unusedElements = Object.keys(this.dictData.config.xema.elements).filter(el => {
                return !savedElements.includes(el)
             })
          },
 
-         startBabelnet() {
-            $.post(window.API_URL + this.dictData.dictId + '/babelnet', (response) => {
-               if (response.babelnet_id != undefined && response.babelnet_id != '') {
-                  this.state.data.babelnet_id = response.babelnet_id;
-                  this.saveData();
-               }
-            });
-         },
-
-         clearBabelnet() {
-            this.state.data.babelnet_id = '';
-            this.saveData();
-         },
-
-         importBabelnet() {
-            $('#babelnet_complete').prop('disabled',true);
-            $.post(window.API_URL + this.dictData.dictId + '/babelnetImport', {babelnet_id: this.state.data.babelnet_id}, (response) => {
-               $('#babelnet_complete').hide();
-               $('#babelnet_complete_msg').show();
-               $('#babelnet_finish').show();
-               if (response.count == undefined) response.count = 0;
-               if (response.count_error == undefined) response.count_error = 0;
-               let outtext = 'Import of Babelnet links finished, links imported: '+response.count+', errors: '+response.count_error;
-               if (response.count_error > 0) {
-                  outtext += '<br/>'+response.errors.join("<br/>");
-               }
-               $('#babelnet_complete_msg').html(outtext);
-            })
-         },
-
-         startLinking() {
-            var otherdictID = $("#otherdict").val()
-            if(otherdictID){
-               this.update({
-                  isLinking: true,
-                  info: "Initiating linking..."
-               })
-               this.store.startLinking($("#otherdict").val())
-                     .done(response => {
-                        this.update({
-                           info: "Linking in progress, please wait...",
-                           checkDelay: 1000
-                        })
-                        this.waitForLinking(otherdictID, response.bgjob)
-                     })
-                     .fail(() => {
-                        this.update({
-                           isLinking: false,
-                           info: "Linking failed."
-                        })
-                     })
-            }
-         },
-
-         waitForLinking(otherdictID, jobID) {
-            this.store.linkingGetProgress(otherdictID, jobID)
-                  .done(response => {
-                     if (response.status == "finished") {
-                        this.update({
-                           isLinking: false,
-                           info: "Linking done. <a href='#/" + this.dictData.dictId + "/links'>See results.</a>"
-                        })
-                     } else if (response.status == "failed") {
-                        this.update({
-                           isLinking: false,
-                           info: "Linking failed"
-                        })
-                     } else {
-                        this.state.checkDelay = this.state.checkDelay < 60000 ? this.state.checkDelay + 2000 : 60000
-                        setTimeout(this.waitForLinking.bind(this, otherdictID, jobID), this.state.checkDelay)
-                     }
-                  })
-                  .fail(() => {
-                     this.update({
-                        isLinking: false,
-                        info: "Linking failed"
-                     })
-                  })
-         },
-
          saveData() {
             var data = {}
-            this.state.data.elements.forEach(item => {
+            this.state.elements.forEach(item => {
                data[item.linkElement] = item
             })
-            data['babelnet_id'] = this.state.data.babelnet_id;
             this.update({isSaving: true})
             this.store.updateDictionaryConfig("links", data)
                   .always(() => this.update({isSaving: false}))

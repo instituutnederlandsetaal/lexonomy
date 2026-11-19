@@ -124,7 +124,7 @@
          },
 
          needAuthorization(content, subPage){
-            if(['e404', 'open-dict-list', 'dict-public', 'dict-public-entry', 'docs-intro', 'docs-about', 'api'].includes(content)
+            if(['e404', 'open-dict-list', 'dict-public', 'dict-public-entry', 'docs-intro', 'docs-about'].includes(content)
                   || content == 'main-page' && !['new', 'userprofile'].includes(subPage)){
                return false
             }
@@ -158,9 +158,6 @@
                windowVersionKey: 'LEXONOMY_VERSION'
             })
 
-            route('/api', () => {
-               this.goTo('api')
-            })
             route('/e404', () => {
                this.goTo('e404')
             })
@@ -204,7 +201,8 @@
                this.goTo('dict-public-entry', '', [dictId, null, entryId])
             })
             route('/*/config/*', (dictId, configId) => {
-               this.goTo('dict-config-' + configId, '', [dictId])
+               const retired = ['ske', 'kontext', 'gapi'].includes(configId)
+               this.goTo(retired ? 'dict-config' : 'dict-config-' + configId, '', [dictId])
             })
             route('/*/config', (dictId) => {
                this.goTo('dict-config', '', [dictId])

@@ -7,14 +7,11 @@ import functools
 from typing import Any, TYPE_CHECKING
 import ops
 import re
-import jwt
 import json
 import datetime
-import urllib.request
 from ops import siteconfig
-import media
 import bottle
-from bottle import (hook, route, get, post, run, error, request,
+from bottle import (HTTPResponse, hook, route, get, post, run, error, request,
                     response, static_file, abort, redirect, install)
 
 from ops import Configs, User
@@ -189,8 +186,6 @@ def lexonomyconfig():
         "licences": siteconfig['licences'],
         "baseUrl": siteconfig['baseUrl']
     }
-    if 'sketchengineLoginPage' in siteconfig:
-        configData['sketchengineLoginPage'] = siteconfig['sketchengineLoginPage']
     if "consent" in siteconfig and siteconfig["consent"].get("terms") != "":
         configData["consent"] = siteconfig["consent"]
     return configData
@@ -316,205 +311,6 @@ def save_consent(user: User):
     res = ops.setConsent(user["email"], request.forms.consent)
     return {"success": res}
 
-@get(siteconfig["rootPath"] + "<dictID>/getmedia/<query>")
-@authDict(["canEdit"])
-def getmedia(dictID: str, query: str, user: User, dictDB: Connection, configs: Configs):
-    res = media.get_images(configs, query)
-    return {"images": res}
-
-@get(siteconfig["rootPath"] + "skeget/corpora")
-@auth
-def skeget_corpora(user: User):
-    import base64
-    req = urllib.request.Request("https://api.sketchengine.eu/ca/api/corpora",
-                                  headers = {"Authorization": "Basic " + base64.b64encode(str.encode(str(user['ske_username'])+':'+str(user['ske_apiKey']))).decode('ascii')})
-    ske_response = urllib.request.urlopen(req)
-    response.headers['Content-Type'] = ske_response.getheader('Content-Type')
-    return ske_response
-
-@get(siteconfig["rootPath"] + "<dictID>/skeget/xampl")
-@authDict(["canEdit"])
-def skeget_xampl(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    url: str = request.query.url
-    url += "/first"
-    url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
-    url += "&username=" + request.query.username
-    url += "&api_key=" + request.query.apikey
-    url += "&format=json"
-    if request.query.querytype == "skesimple":
-        url += "&iquery=" + urllib.parse.quote_plus(request.query.query)
-    else:
-        url += "&queryselector=cqlrow&cql=" + urllib.parse.quote_plus(request.query.query)
-    url += "&viewmode=sen"
-    url += "&gdex_enabled=1"
-    if request.query.fromp:
-        url += "&" + request.query.fromp
-    req = urllib.request.Request(url, headers = {"Authorization": "Bearer " + request.query.apikey})
-    res = urllib.request.urlopen(req)
-    data = json.loads(res.read())
-    return data
-
-@get(siteconfig["rootPath"] + "<dictID>/skeget/thes")
-@authDict(["canEdit"])
-def skeget_thes(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    url: str = request.query.url
-    url += "/thes"
-    url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
-    url += "&username=" + request.query.username
-    url += "&api_key=" + request.query.apikey
-    url += "&format=json"
-    url += "&lemma=" + urllib.parse.quote_plus(request.query.lemma)
-    if request.query.fromp:
-        url += "&" + request.query.fromp
-    req = urllib.request.Request(url, headers = {"Authorization": "Bearer " + request.query.apikey})
-    res = urllib.request.urlopen(req)
-    data = json.loads(res.read())
-    return data
-
-@get(siteconfig["rootPath"] + "<dictID>/skeget/collx")
-@authDict(["canEdit"])
-def skeget_collx(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    url: str = request.query.url
-    url += "/wsketch"
-    url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
-    url += "&username=" + request.query.username
-    url += "&api_key=" + request.query.apikey
-    url += "&format=json"
-    url += "&lemma=" + urllib.parse.quote_plus(request.query.lemma)
-    url += "&structured=0"
-    if request.query.fromp:
-        url += "&" + request.query.fromp
-    req = urllib.request.Request(url, headers = {"Authorization": "Bearer " + request.query.apikey})
-    res = urllib.request.urlopen(req)
-    data = json.loads(res.read())
-    return data
-
-@get(siteconfig["rootPath"] + "<dictID>/skeget/defo")
-@authDict(["canEdit"])
-def skeget_defo(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    url: str = request.query.url
-    url += "/view"
-    url += "?corpname=" + urllib.parse.quote_plus(request.query.corpus)
-    url += "&username=" + request.query.username
-    url += "&api_key=" + request.query.apikey
-    url += "&format=json"
-    url += "&q=" + urllib.parse.quote_plus(ops.makeQuery(request.query.lemma))
-    url += "&q=p+0+0>0+1+[ws(\".*\",\"definitions\",\".*\")]"
-    url += "&viewmode=sen"
-    if request.query.fromp:
-        url += "&" + request.query.fromp
-    req = urllib.request.Request(url, headers = {"Authorization": "Bearer " + request.query.apikey})
-    res = urllib.request.urlopen(req)
-    data = json.loads(res.read())
-    return data
-
-@get(siteconfig["rootPath"] + "<dictID>/kontext/corpora")
-@authDict([])
-def kontext_corpora(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    kontexturl = "https://www.clarin.si/kontext/"
-    if configs.get("kontext") and configs["kontext"].get("url") != "":
-        kontexturl = configs["kontext"].get("url")
-    kontexturl += "corpora/ajax_list_corpora?requestable=1"
-    requrl = kontexturl
-    loadmore = True
-    corpus_list = []
-    while loadmore:
-        res = urllib.request.urlopen(requrl)
-        data = json.loads(res.read())
-        if data["nextOffset"] != None:
-            requrl = kontexturl + "&offset=" + str(data["nextOffset"])
-            corpus_list += data["rows"]
-        else:
-            loadmore = False
-    return {"corpus_list": corpus_list}
-
-@get(siteconfig["rootPath"] + "<dictID>/kontext/conc")
-@authDict([])
-def kontext_xampl(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    kontexturl = configs["kontext"].get("url") + "query_submit?format=json"
-    corpus = configs["kontext"].get("corpus")
-    if request.query.querytype == "kontextcql":
-        cql = urllib.parse.quote_plus(request.query.query)
-    else:
-        cql = '[word=\"' + urllib.parse.quote_plus(request.query.query) + '\"]'
-    request_data = {
-        "type": "concQueryArgs",
-        "maincorp": configs["kontext"].get("corpus"),
-        "viewmode": "sen",
-        "pagesize": 40,
-        "fromp": 0,
-        "queries": [{
-            "qtype": "advanced",
-            "corpname": configs["kontext"].get("corpus"),
-            "query": cql,
-            "pcq_pos_neg": "pos",
-            "include_empty": False,
-            "default_attr":"word"
-        }],
-        "text_types": {},
-        "context":  {
-            "fc_lemword_wsize": [-5, 5],
-            "fc_lemword": "",
-            "fc_lemword_type": "all",
-            "fc_pos_wsize": [-5, 5],
-            "fc_pos": [],
-            "fc_pos_type": "all"
-        },
-        "async": False
-    }
-    if request.query.fromp:
-        request_data['fromp'] = int(request.query.fromp)
-    req = urllib.request.Request(kontexturl)
-    req.add_header('Content-Type', 'application/json; charset=utf-8')
-    jsondata = json.dumps(request_data)
-    jsondataasbytes = jsondata.encode('utf-8')
-    req.add_header('Content-Length', len(jsondataasbytes))
-    res = urllib.request.urlopen(req, jsondataasbytes)
-    data = json.loads(res.read())
-    concurl = configs["kontext"].get("url") + 'view?corpname=' + configs["kontext"].get("corpus") + '&viewmode=sen&q=' + data['Q'][0]
-    if request.query.fromp:
-        concurl += '&fromp=' + request.query.fromp
-    if request.query.redir and request.query.redir == '1':
-        return redirect(concurl)
-    concurl += '&format=json'
-    res = urllib.request.urlopen(concurl)
-    data = json.loads(res.read())
-    return data
-
-@post(siteconfig["rootPath"] + "<dictID>/babelnet")
-@authDict([])
-def babelnet(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    import base64
-    if request.forms.babelnet_id == None or request.forms.babelnet_id == '':
-        url = 'http://babelnet.linkingmachine.org/submit/'
-        data = {'entries': [], 'source': {'id': dictID, 'apiKey': user['apiKey']}}
-        req = urllib.request.Request(url, data=bytes(json.dumps(data), encoding="utf-8"), method='POST')
-    else:
-        url = 'http://babelnet.linkingmachine.org/status/?request_id=' + request.forms.babelnet_id
-        req = urllib.request.Request(url, method='GET')
-    base64string = base64.b64encode(bytes('%s:%s' % ('rest', 'tKn!.X/sWnr5'),'ascii'))
-    req.add_header("Authorization", "Basic %s" % base64string.decode('utf-8'))
-    res = urllib.request.urlopen(req)
-    if request.forms.babelnet_id == None or request.forms.babelnet_id == '':
-        data = {'babelnet_id': res.read().decode('utf-8')}
-    else:
-        data = json.loads(res.read())
-    return data
-
-@post(siteconfig["rootPath"] + "<dictID>/babelnetImport")
-@authDict([])
-def babelnetImport(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    import base64
-    url = 'http://babelnet.linkingmachine.org/result?request_id=' + request.forms.babelnet_id
-    req = urllib.request.Request(url, method='GET')
-    base64string = base64.b64encode(bytes('%s:%s' % ('rest', 'tKn!.X/sWnr5'),'ascii'))
-    req.add_header("Authorization", "Basic %s" % base64string.decode('utf-8'))
-    res = urllib.request.urlopen(req)
-    data = res.read()
-    jsondata = json.loads(data)
-    count_succces, count_error, errors = ops.importBabelnetLinks(dictID, dictDB, jsondata)
-    return {'success': True, 'count_success': count_succces, 'count_error': count_error, 'errors': errors}
-
 @post(siteconfig["rootPath"] + "login.json")
 def check_login():
     if request.forms.email != "" and request.forms.password != "":
@@ -524,11 +320,11 @@ def check_login():
             #response.set_cookie("sessionkey", res["key"], path="/")
             response.add_header('Set-Cookie', "email=\""+res["email"]+"\"; Path=/; SameSite=None; Secure")
             response.add_header('Set-Cookie', "sessionkey="+res["key"]+"; Path=/; SameSite=None; Secure")
-            return {"success": True, "email": res["email"], "sessionkey": res["key"], "ske_username": res["ske_username"], "ske_apiKey": res["ske_apiKey"], "apiKey": res["apiKey"], "consent": res["consent"]}
+            return {"success": True, "email": res["email"], "sessionkey": res["key"], "consent": res["consent"]}
     if request.cookies.email != "" and request.cookies.sessionkey != "":
         res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
         if res["loggedin"]:
-            return {"success": True, "email": res["email"], "sessionkey": request.cookies.sessionkey, "ske_username": res["ske_username"], "ske_apiKey": res["ske_apiKey"], "apiKey": res["apiKey"], "consent": res["consent"]}
+            return {"success": True, "email": res["email"], "sessionkey": request.cookies.sessionkey, "consent": res["consent"]}
     return {"success": False}
 
 @post(siteconfig["rootPath"] + "logout.json")
@@ -619,41 +415,6 @@ def changepwd(user: User):
     res = ops.changePwd(user["email"], request.forms.password)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "changeskeusername.json")
-@auth
-def changeskeusername(user: User):
-    res = ops.changeSkeUserName(user["email"], request.forms.ske_userName)
-    return {"success": res}
-
-@post(siteconfig["rootPath"] + "changeskeapi.json")
-@auth
-def changeskeapi(user: User):
-    res = ops.changeSkeApiKey(user["email"], request.forms.ske_apiKey)
-    return {"success": res}
-
-@post(siteconfig["rootPath"] + "changeoneclickapi.json")
-@auth
-def changeoneclickapi(user: User):
-    res = ops.updateUserApiKey(user, request.forms.apiKey)
-    return {"success": res}
-
-@get(siteconfig["rootPath"] + "skelogin.json/<token>")
-def skelogin(token: str):
-    secret = siteconfig["sketchengineKey"]
-    try:
-        jwtdata = jwt.decode(token, secret, audience="lexonomy.eu", algorithms="HS256")
-        user = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
-        res = ops.processJWT(user, jwtdata)
-        if res["success"]:
-            response.set_cookie("email", res["email"].lower(), path="/")
-            response.set_cookie("sessionkey", res["key"], path="/")
-            return redirect("/")
-        else:
-            response.set_cookie("jwt_error", str(res["error"]), path="/")
-            return redirect("/")
-    except Exception as e:
-        return redirect("/")
-
 @post(siteconfig["rootPath"] + "users/userlist.json")
 @authAdmin
 def userelist(user: User):
@@ -704,16 +465,14 @@ def dictread(user: User):
 
 @get(siteconfig["rootPath"]+"<dictID>/config.json")
 def dictconfig(dictID: str):
-    if dictID == 'BABELNET':
-        return {"success": True, "publicInfo": {"title": "BABELNET"}}
-    elif not ops.dictExists(dictID):
+    if not ops.dictExists(dictID):
         return {"success": False}
     else:
         with ops.getDB(dictID) as dictDB:
             user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, dictDB)
             doctypes = [configs["xema"]["root"]] + list(configs["subbing"].keys()) + ops.readDoctypesUsed(dictDB)
             doctypes = list(set(doctypes))
-            res = {"success": True, "publicInfo": {**configs["ident"], **configs["publico"]}, "userAccess": user["dictAccess"], "configs": {"xema": configs["xema"], "xemplate": configs["xemplate"], "kex": configs["kex"], "kontext": configs["kontext"], "subbing": configs["subbing"], "xampl": configs["xampl"], "thes": configs["thes"], "collx": configs["collx"], "defo": configs["defo"], "titling": configs["titling"], "flagging": configs["flagging"], "linking": configs["links"], "editing": configs["editing"], "metadata": configs["metadata"], "gapi": configs["gapi"]}, "doctype": configs["xema"]["root"], "doctypes": doctypes}
+            res = {"success": True, "publicInfo": {**configs["ident"], **configs["publico"]}, "userAccess": user["dictAccess"], "configs": {"xema": configs["xema"], "xemplate": configs["xemplate"], "subbing": configs["subbing"], "titling": configs["titling"], "flagging": configs["flagging"], "linking": configs["links"], "editing": configs["editing"], "metadata": configs["metadata"]}, "doctype": configs["xema"]["root"], "doctypes": doctypes}
             res["publicInfo"]["blurb"] = ops.markdown_text(str(configs["ident"]["blurb"] or ""))
             return res
 
@@ -835,10 +594,9 @@ def publicsearch(dictID: str):
 @post(siteconfig["rootPath"]+"<dictID>/configread.json")
 @authDict(["canConfig"])
 def configread(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    if request.forms.id == 'ske':
-        config_data: Any = {'kex': configs['kex'], 'collx': configs['collx'], 'xampl': configs['xampl'], 'thes': configs['thes'], 'defo': configs['defo']}
-    else:
-        config_data = configs[request.forms.id]
+    if request.forms.id in ops.RETIRED_DICT_CONFIGS:
+        abort(404)
+    config_data = configs[request.forms.id]
     if request.forms.id == 'ident':
         config_data['langs'] = ops.get_iso639_1()
     if request.forms.id == 'titling':
@@ -848,16 +606,9 @@ def configread(dictID: str, user: User, dictDB: Connection, configs: Configs):
 @post(siteconfig["rootPath"]+"<dictID>/configupdate.json")
 @authDict(["canConfig"])
 def configupdate(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    if request.forms.id == 'ske':
-        adjustedJson = {}
-        jsonData = json.loads(request.forms.content)
-        adjustedJson['kex'] = ops.updateDictConfig(dictDB, dictID, 'kex', jsonData['kex'])
-        adjustedJson['xampl'] = ops.updateDictConfig(dictDB, dictID, 'xampl', jsonData['xampl'])
-        adjustedJson['collx'] = ops.updateDictConfig(dictDB, dictID, 'collx', jsonData['collx'])
-        adjustedJson['defo'] = ops.updateDictConfig(dictDB, dictID, 'defo', jsonData['defo'])
-        adjustedJson['thes'] = ops.updateDictConfig(dictDB, dictID, 'thes', jsonData['thes'])
-    else:
-        adjustedJson = ops.updateDictConfig(dictDB, dictID, request.forms.id, json.loads(request.forms.content))
+    if request.forms.id in ops.RETIRED_DICT_CONFIGS:
+        abort(404)
+    adjustedJson = ops.updateDictConfig(dictDB, dictID, request.forms.id, json.loads(request.forms.content))
     if request.forms.id == 'users':
         ops.notifyUsers(configs['users'], adjustedJson, configs['ident'], dictID)
         # Resaving the entries is not required here. If needed, entries have been flagged and will be updated as they are used.
@@ -874,20 +625,6 @@ def next_autonumber(dictID: str, user: User, dictDB: Connection, configs: Config
     element = request.forms.element
     target = request.forms.get("target")
     return { "next": ops.get_next_autonumber_value(dictDB, element, target) }
-
-@post(siteconfig["rootPath"]+"<dictID>/autoimage.json")
-@authDict(["canEdit"])
-def autoimage(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    res = ops.autoImage(dictDB, dictID, configs, request.forms.addElem, request.forms.addNumber)
-    return res
-
-@get(siteconfig["rootPath"]+"<dictID>/autoimageprogress.json")
-@authDict([])
-def autoimagestatus(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    res = ops.autoImageStatus(dictDB, dictID, request.query.jobid)
-    if not res:
-        abort(400, "Invalid job")
-    return res
 
 @post(siteconfig["rootPath"]+"<dictID>/resave.json")
 @authDict(["canEdit","canConfig","canUpload"])
@@ -909,131 +646,6 @@ def resavejson(dictID: str, user: User, dictDB: Connection, configs: Configs):
         "finished": todo == 0,
         "progressMessage": f"Reindexing - {todo} entries remaining..."
     }
-
-@post(siteconfig["rootPath"] + "<dictID>/<doctype>/ontolex.api")
-def ontolex(dictID: str, doctype: str):
-    data = json.loads(request.body.getvalue().decode('utf-8'))
-    if not data.get("email") or not data.get("apikey"):
-        return {"success": False, "message": "missing email or api key"}
-    user = ops.verifyUserApiKey(data["email"], data["apikey"])
-    if not user["valid"]:
-        return {"success": False}
-    
-    search = data.get("search", "")
-    with ops.getDB(dictID) as dictDB:
-        configs = ops.readDictConfigs(dictDB)
-        dictAccess = configs["users"].get(user["email"]) or user["email"] in siteconfig["admins"]
-        if not dictAccess:
-            return {"success": False}
-        else:
-            response.headers['Content-Type'] = "text/plain; charset=utf-8"
-            return ops.listOntolexEntries(dictDB, dictID, configs, doctype, search)
-
-@get(siteconfig["rootPath"] + "api")
-def apitest():
-    return redirect("/#/api")
-
-@post(siteconfig["rootPath"] + "api/listLang")
-def apilistlang():
-    data = json.loads(request.body.getvalue().decode('utf-8'))
-    user = ops.verifyUserApiKey(data["email"], data["apikey"])
-    if not user["valid"]:
-        return {"success": False}
-    else:
-        langs = ops.getLangList()
-        return {"languages": langs, "success": True}
-
-@post(siteconfig["rootPath"] + "api/listDict")
-def apilistdict():
-    data = json.loads(request.body.getvalue().decode('utf-8'))
-    user = ops.verifyUserApiKey(data["email"], data["apikey"])
-    if not user["valid"]:
-        return {"success": False}
-    else:
-        dicts = ops.getDictList(data.get('lang'), data.get('withLinks'), True)
-        return {"dictionaries": dicts, "success": True}
-
-@post(siteconfig["rootPath"] + "api/listLinks")
-def apilistlink():
-    data = json.loads(request.body.getvalue().decode('utf-8'))
-    user = ops.verifyUserApiKey(data["email"], data["apikey"])
-    if not user["valid"]:
-        return {"success": False, "msg": "invalid user"}
-    else:
-        if data.get('headword') and (data.get('sourceLanguage') or data.get('sourceDict')):
-            dicts = ops.getLinkList(data.get('headword'), data.get('sourceLanguage'), data.get('sourceDict'), data.get('targetLanguage'))
-            return {"links": dicts, "success": True}
-        else:
-            return {"success": False, "msg": "missing parameters"}
-
-@get(siteconfig["rootPath"] + "push.api")
-def pushtest():
-    return redirect("/#/api")
-
-@app.route(siteconfig["rootPath"] + "push.api", 'OPTIONS')
-def pushapioptions():
-    return {}
-
-@post(siteconfig["rootPath"] + "push.api")
-def pushapi():
-    data = json.loads(request.body.getvalue().decode('utf-8'))
-    user = ops.verifyUserApiKey(data["email"], data["apikey"])
-    if not user["valid"]:
-        return {"success": False}
-    else:
-        if data["command"] == "makeDict":
-            dictID = ops.suggestDictId()
-            dictTitle = re.sub(r"^\s+", "", data["dictTitle"])
-            if dictTitle == "":
-                dictTitle = dictID
-            dictBlurb = data["dictBlurb"]
-            poses = []
-            labels = []
-            if "poses" in data:
-                poses = data["poses"]
-            if "labels" in data:
-                labels = data["labels"]
-            if data.get("format") == "teilex0":
-                dictFormat = "teilex0"
-            else:
-                dictFormat = "push"
-            res = ops.makeDict(dictID, dictFormat, dictTitle, dictBlurb, user["email"])
-            if not res:
-                return {"success": False}
-            else:
-                if dictFormat == "push":
-                    with ops.getDB(dictID) as dictDB:
-                        configs = ops.readDictConfigs(dictDB)
-                        if configs["xema"]["elements"].get("partOfSpeech"):
-                            for pos in poses:
-                                configs["xema"]["elements"]["partOfSpeech"]["values"].append({"value": pos, "caption": ""})
-                        if configs["xema"]["elements"].get("collocatePartOfSpeech"):
-                            for pos in poses:
-                                configs["xema"]["elements"]["collocatePartOfSpeech"]["values"].append({"value": pos, "caption":""})
-                        if configs["xema"]["elements"].get("label"):
-                            for label in labels:
-                                configs["xema"]["elements"]["label"]["values"].append({"value":label, "caption": ""})
-                        ops.updateDictConfig(dictDB, dictID, "xema", configs["xema"])
-                return {"success": True, "dictID": dictID}
-        elif data["command"] == "listDicts":
-            dicts = ops.getDictsByUser(user["email"])
-            return {"entries": dicts, "success": True}
-        elif data["command"] == "createEntries":
-            dictID = data["dictID"]
-            entryXmls = data["entryXmls"]
-            with ops.getDB(dictID) as dictDB:
-                configs = ops.readDictConfigs(dictDB)
-                dictAccess = configs["users"].get(user["email"])
-                if dictAccess and (dictAccess["canEdit"] or dictAccess["canUpload"]):
-                    for entry in entryXmls:
-                        if data.get("format") == "teilex0":
-                            entry = ops.preprocessLex0(entry)
-                        ops.createEntry(dictDB, configs, None, entry, user["email"], {"apikey": data["apikey"]})
-                    return {"success": True}
-                else:
-                    return {"success": False}
-        else:
-            return {"success": False}
 
 @get(siteconfig["rootPath"]+"publicdicts.json")
 def publicdicts():
@@ -1100,31 +712,6 @@ def linkablelist(dictID, user, dictDB, configs):
     res = ops.getDictLinkables(dictDB)
     return {"links": res}
 
-@get(siteconfig["rootPath"]+"<dictID>/linknaisc.json")
-@authDict([])
-def linkNaisc(dictID, user, dictDB, configs):
-    otherdictID = request.query.otherdictID
-    if dictID == otherdictID:
-        abort(400, "Linking dictionary to the same dictionary does not make any sense")
-    
-    with ops.getDB(otherdictID) as otherconn:
-        _res, otherconfigs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, otherconn)
-        res = ops.linkNAISC(dictDB, dictID, configs, otherconn, otherdictID, otherconfigs)
-        return res
-
-@get(siteconfig["rootPath"]+"<dictID>/naiscprogress.json")
-@authDict([])
-def checkNaisc(dictID, user, dictDB, configs):
-    res = ops.getNAISCstatus(dictDB, dictID, request.query.otherdictID, request.query.jobid)
-    if not res:
-        abort(400, "Invalid job")
-    return res
-
-@get(siteconfig["rootPath"]+"<dictID>/linking.json")
-@authDict([])
-def linking(dictID, user, dictDB, configs):
-    return ops.isLinking(dictDB)
-
 @get(siteconfig["rootPath"]+"<dictID>/entrylinks.json")
 @authDict([])
 def entrylinks(dictID, user, dictDB, configs):
@@ -1169,96 +756,9 @@ def dicteditdoc(dictID, doctype):
 def docintro():
     return redirect("/#docs/intro")
 
-# ELEXIS REST API https://elexis-eu.github.io/elexis-rest/
-@get(siteconfig["rootPath"] + "dictionaries")
-def elexlistdict():
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    else:
-        dicts = list(map(lambda h: h['id'], ops.getDictList(None, None)))
-        return {"dictionaries": dicts}
-
-@get(siteconfig["rootPath"] + "about/<dictID>")
-def elexaboutdict(dictID):
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    dictinfo = ops.elexisDictAbout(dictID)
-    if dictinfo is None:
-        abort(404, "Dictionary not found (identifier not known)")
-    else:
-        return dictinfo
-
-@get(siteconfig["rootPath"] + "list/<dictID>")
-def elexlistlemma(dictID):
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    lemmalist = ops.elexisLemmaList(dictID, request.query.limit, request.query.offset)
-    if lemmalist is None:
-        abort(404, "Dictionary not found (identifier not known)")
-    else:
-        return json.dumps(lemmalist)
-
-@get(siteconfig["rootPath"] + "lemma/<dictID>/<headword>")
-def elexgetlemma(dictID, headword):
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    lemmalist = ops.elexisGetLemma(dictID, headword, request.query.limit, request.query.offset)
-    if lemmalist is None:
-        abort(404, "Dictionary not found (identifier not known)")
-    else:
-        return json.dumps(lemmalist)
-
-@get(siteconfig["rootPath"] + "tei/<dictID>/<entryID>")
-def elexgetentry(dictID, entryID):
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    entry = ops.elexisGetEntry(dictID, entryID)
-    if entry is None:
-        abort(404, "No Entry Available")
-    else:
-        response.content_type = "text/xml; charset=utf-8"
-        return entry
-
-@get(siteconfig["rootPath"] + "json/<dictID>/<entryID>")
-def elexgetentry(dictID, entryID):
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    entry = ops.elexisConvertTei(ops.elexisGetEntry(dictID, entryID))
-    if entry is None:
-        abort(404, "No Entry Available")
-    else:
-        return entry
-
-@get(siteconfig["rootPath"] + "jsonAll/<dictID>")
-def elexgetentry(dictID):
-    apikey = request.headers["X-API-KEY"]
-    user = ops.verifyUserApiKey("", apikey)
-    if not user["valid"]:
-        abort(403, "Forbidden (API key not specified or not valid")
-    data = ops.elexisConvertAll(dictID)
-    if data is None:
-        abort(404, "Dictionary not found (identifier not known)")
-    else:
-        return json.dumps(data)
-
 @error(404)
-def error404(error):
-    if request.path.startswith("/about/") or request.path.startswith("/list/") or request.path.startswith("/lemma/") or request.path.startswith("/tei/") or request.path.startswith("/json/"):
-        return error.body
-    else:
-        return redirect("/#/e404")
+def error404(_error):
+    return HTTPResponse(status=303, headers={"Location": "/#/e404"})
 
 # deployment
 debug="DEBUG" in os.environ

@@ -16,7 +16,6 @@ import smtplib, ssl
 from email.message import EmailMessage
 from typing import Any, Callable, Iterable, List, Literal, Optional, Tuple, TypedDict, Union, Set
 from typing_extensions import NotRequired
-import urllib
 from bs4 import BeautifulSoup, Tag
 import shutil
 import markdown
@@ -24,7 +23,6 @@ import re
 import secrets
 import pathlib
 from icu import Locale, Collator
-import requests
 
 class ConfigTitling(TypedDict):
     headword: NotRequired[str]
@@ -180,10 +178,6 @@ class ConfigDownload(TypedDict):
     xslt: NotRequired[str]
     "xslt to apply to exported/downloaded entry xml"
 
-class ConfigKontext(TypedDict):
-    url: str
-    corpus: str
-
 class ConfigAutoNumbering(TypedDict):
     """Given an element to count, and a place to put the number of occurances (or """
 
@@ -236,7 +230,6 @@ class Configs(TypedDict):
     publico: ConfigPublico
     metadata: ConfigMetadata
     download: ConfigDownload
-    kontext: ConfigKontext
     autonumbering: dict[str, ConfigAutoNumbering]
 
 # Other types
@@ -244,32 +237,6 @@ class IsoCode(TypedDict):
     code: str
     code3: str
     lang: str
-
-class Language(TypedDict):
-    code: str
-    language: str
-
-class DictionaryLink(TypedDict):
-    # A little unsure about this type. Documented what was set in the function.
-    sourceDict: str
-    sourceHeadword: str
-    sourceID: str
-    "ID of an entry in the dictionary. Textual for some reason (see crossref.sqlite.schema)"
-    sourceSense: str
-    sourceUrl: str
-    "Lexonomy URL path to the source entry, usually something like 'http://lexonomy.tld/${sourceDict}/${sourceID}'"
-    targetDict: str
-    confidence: float
-    targetLang: str
-    "Can be empty"
-    targetDictConcept: bool
-    "Some sort of switch that indicates what the rest of the link object represents? I.E. 'is the target a concept?'"
-    targetSense: str
-    targetHeadword: str
-    targetID: str
-    targetURL: str
-    sourceDictTitle: str
-    targetDictTitle: str
 
 class ListedUser(TypedDict):
     id: str
@@ -286,6 +253,7 @@ class Historiography(TypedDict):
     "str(datetime.datetime.utcnow())"
     filename: NotRequired[str]
     "Path of the newly uploaded file (after saving as tempfile on the server) when uploading a dictionary and purging the old data."
+    viaApi: NotRequired[bool]
 
 class HistoryEntry(TypedDict):
     entry_id: int
@@ -325,10 +293,6 @@ class EntryFromDatabase(TypedDict):
 
 class User(TypedDict):
     email: str
-    ske_username: Optional[str]
-    ske_apiKey: Optional[str]
-    apiKey: Optional[str]
-    """Lexonomy Api key for your user, so other applications can access your data in Lexonomy."""
     loggedin: bool
 
 currdir = os.path.dirname(os.path.abspath(__file__))
@@ -402,14 +366,17 @@ def sendmail(mailTo: str, mailSubject: str, mailText: str):
 
 
 # config
+RETIRED_DICT_CONFIGS = {"ske", "kex", "kontext", "xampl", "thes", "collx", "defo", "gapi"}
+
 def readDictConfigs(dictDB: Connection) -> Configs:
-    configs = {"siteconfig": siteconfig}
+    configs = {}
     c = dictDB.execute("select * from configs")
     for r in c.fetchall():
-        configs[r["id"]] = json.loads(r["json"])
-    for conf in ["ident", "publico", "users", "kex", "kontext", "titling", "flagging",
-                 "searchability", "xampl", "thes", "collx", "defo", "xema",
-                 "xemplate", "editing", "subbing", "download", "links", "autonumber", "gapi", "metadata", "autonumbering"]:
+        if r["id"] not in RETIRED_DICT_CONFIGS:
+            configs[r["id"]] = json.loads(r["json"])
+    for conf in ["ident", "publico", "users", "titling", "flagging",
+                 "searchability", "xema", "xemplate", "editing", "subbing",
+                 "download", "links", "autonumber", "metadata", "autonumbering"]:
         if not conf in configs:
             configs[conf] = defaultDictConfig.get(conf, {})
 
@@ -430,16 +397,14 @@ def verifyLogin(email: str, sessionkey: str):
         now = datetime.datetime.utcnow()
         yesterday = now - datetime.timedelta(days=1)
         email = email.lower()
-        c = conn.execute("select email, ske_apiKey, ske_username, apiKey, consent from users where email=? and sessionKey=? and sessionLast>=?", (email, sessionkey, yesterday))
+        c = conn.execute("select consent from users where email=? and sessionKey=? and sessionLast>=?", (email, sessionkey, yesterday))
         user = c.fetchone()
         if not user:
             return {"loggedin": False, "email": None}
         conn.execute("update users set sessionLast=? where email=?", (now, email))
         conn.commit()
-        ret = {"loggedin": True, "email": email, "isAdmin": email in siteconfig["admins"],
-            "ske_username": user["ske_username"], "ske_apiKey": user["ske_apiKey"],
-            "apiKey": user["apiKey"], "consent": user["consent"] == 1}
-        return ret
+        return {"loggedin": True, "email": email, "isAdmin": email in siteconfig["admins"],
+            "consent": user["consent"] == 1}
 
 def verifyLoginAndDictAccess(email: str, sessionkey: str, dictDB: Connection):
     ret = verifyLogin(email, sessionkey)
@@ -1478,7 +1443,7 @@ def login(email: str, password: str):
         return {"success": False}
     with getMainDB() as conn:
         passhash = hashlib.sha1(password.encode("utf-8")).hexdigest()
-        c = conn.execute("select email, apiKey, ske_username, ske_apiKey, consent from users where email=? and passwordHash=?", (email.lower(), passhash))
+        c = conn.execute("select email, consent from users where email=? and passwordHash=?", (email.lower(), passhash))
         user = c.fetchone()
         if not user:
             return {"success": False}
@@ -1486,7 +1451,7 @@ def login(email: str, password: str):
         now = datetime.datetime.utcnow()
         conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, email))
         conn.commit()
-        return {"success": True, "email": user["email"], "key": key, "ske_username": user["ske_username"], "ske_apiKey": user["ske_apiKey"], "apiKey": user["apiKey"], "consent": user["consent"] == 1}
+        return {"success": True, "email": user["email"], "key": key, "consent": user["consent"] == 1}
 
 def logout(user: User):
     with getMainDB() as conn:
@@ -1594,99 +1559,6 @@ def changePwd(email: str, password: str):
         conn.execute("update users set passwordHash=? where email=?", (passhash, email))
         conn.commit()
         return True
-
-def changeSkeUserName(email: str, ske_userName: str):
-    with getMainDB() as conn:
-        conn.execute("update users set ske_username=? where email=?", (ske_userName, email))
-        conn.commit()
-        return True
-
-def changeSkeApiKey(email: str, ske_apiKey: str):
-    with getMainDB() as conn:
-        conn.execute("update users set ske_apiKey=? where email=?", (ske_apiKey, email))
-        conn.commit()
-        return True
-
-def updateUserApiKey(user: User, apiKey: str):
-    with getMainDB() as conn:
-        conn.execute("update users set apiKey=? where email=?", (apiKey, user["email"]))
-        conn.commit()
-        sendApiKeyToSke(user, apiKey)
-        return True
-
-def sendApiKeyToSke(user: User, apiKey: str):
-    if user["ske_username"] and user["ske_apiKey"]:
-        data = json.dumps({"options": {"settings_lexonomyApiKey": apiKey, "settings_lexonomyEmail": user["email"].lower()}})
-        queryData = urllib.parse.urlencode({ "username": user["ske_username"], "api_key": user["ske_apiKey"], "json": data })
-        url = "https://api.sketchengine.eu/bonito/run.cgi/set_user_options?" + queryData
-        res = urllib.request.urlopen(url)
-    return True
-
-def prepareApiKeyForSke(email: str):
-    with getMainDB() as conn:
-        c = conn.execute("select * from users where email=?", (email,))
-        row = c.fetchone()
-        if row:
-            if row["apiKey"] == None or row["apiKey"] == "":
-                lexapi = generateKey()
-                conn.execute("update users set apiKey=? where email=?", (lexapi, email))
-                conn.commit()
-            else:
-                lexapi = row["apiKey"]
-            sendApiKeyToSke(row, lexapi)
-        return True
-
-class JWTDataUser(TypedDict):
-    id: str
-    email: str
-    username: str
-    api_key: str
-
-class JWTData(TypedDict):
-    user: JWTDataUser
-
-class JWTStatusOkay(TypedDict):
-    success: Literal[True]
-    email: str
-    key: str
-
-class JTWStatusError(TypedDict):
-    success: Literal[False]
-    error: str
-
-def processJWT(user: User, jwtdata: JWTData) -> Union[JWTStatusOkay, JTWStatusError]:
-    with getMainDB() as conn:
-        c = conn.execute("select * from users where ske_id=?", (jwtdata["user"]["id"],))
-        row = c.fetchone()
-        key = generateKey()
-        now = datetime.datetime.utcnow()
-        if row:
-            #if SkE ID in database = log in user
-            conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, row["email"]))
-            conn.commit()
-            prepareApiKeyForSke(row["email"])
-            return {"success": True, "email": row["email"], "key": key}
-        else:
-            if user["loggedin"]:
-                #user logged in = save SkE ID in database
-                conn.execute("update users set ske_id=?, ske_username=?, ske_apiKey=?, sessionKey=?, sessionLast=? where email=?", (jwtdata["user"]["id"], jwtdata["user"]["username"], jwtdata["user"]["api_key"], key, now, user["email"]))
-                conn.commit()
-                prepareApiKeyForSke(user["email"])
-                return {"success": True, "email": user["email"], "key": key}
-            else:
-                #user not logged in = register and log in
-                email = jwtdata["user"]["email"].lower()
-                c2 = conn.execute("select * from users where email=?", (email,))
-                row2 = c2.fetchone()
-                if not row2:
-                    lexapi = generateKey()
-                    conn.execute("insert into users (email, passwordHash, ske_id, ske_username, ske_apiKey, sessionKey, sessionLast, apiKey) values (?, null, ?, ?, ?, ?, ?, ?)", (email, jwtdata["user"]["id"], jwtdata["user"]["username"], jwtdata["user"]["api_key"], key, now, lexapi))
-                    conn.commit()
-                    prepareApiKeyForSke(email)
-                    return {"success": True, "email": email, "key": key}
-                else:
-                    return {"success": False, "error": "user with email " + email + " already exists. Log-in and connect account to SkE."}
-
 
 def dictExists(dictID: str) -> bool:
     return os.path.isfile(os.path.join(siteconfig["dataDir"], "dicts/" + dictID + ".sqlite"))
@@ -1870,285 +1742,13 @@ def getPublicDicts() -> list[DictInfo]:
                     if configs["publico"]["public"]:
                         cc = dictDB.execute("select count(*) as total from entries")
                         size = cc.fetchone()["total"]
-                        configs = loadHandleMeta(configs)
                         dictinfo: DictInfo = {"id": r["id"], "title": r["title"], "author": "", "lang": configs["ident"].get("lang"), "licence": configs["publico"]["licence"], "size": size, "hasLinks": False}
                         if len(list(configs["users"].keys())) > 0:
                             dictinfo["author"] = re.sub(r"@.*","@...", list(configs["users"].keys())[0])
-                        if title := configs["metadata"].get("dc.title"):
-                            dictinfo["title"] = title
-                        if iso := configs["metadata"].get("dc.language.iso"):
-                            langs = [t['lang'] for t in get_iso639_1() if t['code3'] == configs["metadata"]["dc.language.iso"][0]]
-                            dictinfo["lang"] = langs[0] if len(langs) > 0 else dictinfo["lang"]
-                        if configs["metadata"].get("dc.rights") and configs["metadata"].get("dc.rights") != "":
-                            dictinfo["licence"] = configs["metadata"].get("dc.rights")
-                        if configs["metadata"].get("dc.contributor.author") and len(configs["metadata"].get("dc.contributor.author")) > 0:
-                            dictinfo["author"] = '; '.join(configs["metadata"].get("dc.contributor.author"))
                         dicts.append(dictinfo)
             except:
                 continue
         return dicts
-
-def getLangList() -> List[Language]:
-    langs: List[Language] = []
-    codes = get_iso639_1()
-    with getMainDB() as conn:
-        c = conn.execute("SELECT DISTINCT language FROM dicts WHERE language!='' ORDER BY language")
-        for r in c.fetchall():
-            lang: IsoCode = next((item for item in codes if item["code"] == r["language"]), {})
-            langs.append({"code": r["language"], "language": lang.get("lang")})
-        return langs
-
-def getDictList(lang: str, withLinks: bool, loadHandle: bool=False):
-    dicts: List[DictInfo] = []
-    with getMainDB() as conn:
-        if lang:
-            c = conn.execute("SELECT * FROM dicts WHERE language=? ORDER BY title", (lang, ))
-        else:
-            c = conn.execute("SELECT * FROM dicts ORDER BY title")
-        for r in c.fetchall():
-            info: DictInfo = {"id": r["id"], "title": r["title"], "lang": r["language"], "hasLinks": False}
-            try:
-                with getDB(r["id"]) as dictDB:
-                    configs = readDictConfigs(dictDB)
-                    if configs["links"] and len(configs["links"])>0:
-                        info["hasLinks"] = True
-                    if loadHandle:
-                        configs = loadHandleMeta(configs)
-                        if configs["metadata"].get("dc.title"):
-                            info["title"] = configs["metadata"]["dc.title"]
-            except:
-                info["broken"] = True
-            if not withLinks or (withLinks == True and info["hasLinks"] == True):
-                dicts.append(info)
-        return dicts
-
-def getLinkList(headword: str, sourceLang: str, sourceDict: str, targetLang: str) -> List[DictionaryLink]:
-    links: List[DictionaryLink] = []
-    linkDB = getLinkDB()
-    if sourceDict and sourceDict != "":
-        dicts = [{"id": sourceDict}]
-    else:
-        dicts = getDictList(sourceLang, True)
-
-    for d in dicts:
-        try:
-            dictDB = getDB(d["id"])
-        except IOError:
-            dictDB = None
-        if dictDB:
-            query = "SELECT DISTINCT l.entry_id AS entry_id, l.txt AS link_id, l.element AS link_el, s.txt AS hw, l.preview as preview FROM searchables AS s, linkables AS l  WHERE s.entry_id=l.entry_id AND s.txt LIKE ? "
-            c = dictDB.execute(query, (headword+"%", ))
-            for entry in c.fetchall():
-                info0 = {"sourceDict": d["id"], "sourceHeadword": entry["hw"], "sourcePreview": entry["preview"]}
-                if entry["entry_id"] and entry["entry_id"] != "":
-                    info0["sourceID"] = entry["entry_id"]
-                if entry["link_el"] == "sense" and "_" in entry["link_id"]:
-                    lia = entry["link_id"].split("_")
-                    info0["sourceSense"] = lia[1]
-                    if not info0["sourceID"]:
-                        info0["sourceID"] = lia[0]
-                info0["sourceURL"] = siteconfig["baseUrl"] + info0["sourceDict"] + "/" + str(info0["sourceID"])
-                # first, find links with searched dict as source
-                if targetLang:
-                    targetDicts: List[str] = []
-                    for td in getDictList(targetLang, True):
-                        targetDicts.append(td["id"])
-                    query2 = "SELECT * FROM links WHERE source_dict=? AND source_id=? AND target_dict IN "+"('"+"','".join(targetDicts)+"')"
-                else:
-                    query2 = "SELECT * FROM links WHERE source_dict=? AND source_id=?"
-                data2 = (d["id"], entry["link_id"])
-                c2 = linkDB.execute(query2, data2)
-                for r2 in c2.fetchall():
-                    info = info0.copy()
-                    info["targetDict"] = r2["target_dict"]
-                    info["confidence"] = r2["confidence"]
-                    try:
-                        targetDB = getDB(r2["target_dict"])
-                    except IOError:
-                        targetDB = None
-                    if targetDB:
-                        info["targetLang"] = readDictConfigs(targetDB)['ident']['lang']
-                        info["targetDictConcept"] = False
-                        if r2["target_element"] == "sense" and "_" in r2["target_id"]:
-                            lia = r2["target_id"].split("_")
-                            info["targetSense"] = lia[1]
-                        query3 = "SELECT DISTINCT l.entry_id AS entry_id, l.txt AS link_id, l.element AS link_el, s.txt AS hw, l.preview as preview FROM searchables AS s, linkables AS l  WHERE s.entry_id=l.entry_id AND l.txt=?"
-                        c3 = targetDB.execute(query3, (r2["target_id"],))
-                        for r3 in c3.fetchall():
-                            info["targetHeadword"] = r3["hw"]
-                            info["targetID"] = r3["entry_id"]
-                            info["targetPreview"] = r3["preview"]
-                            info["targetURL"] = siteconfig["baseUrl"] + info["targetDict"] + "/" + str(info["targetID"])
-                            links.append(info)
-                    else:
-                        info["targetHeadword"] = r2["target_id"]
-                        info["targetID"] = r2["target_id"]
-                        info["targetDictConcept"] = True
-                        info["targetURL"] = ""
-                        info["targetSense"] = ""
-                        info["targetLang"] = ""
-                        info["targetPreview"] = ""
-                        links.append(info)
-                # second, find links with search dict as target
-                if targetLang:
-                    query2 = "SELECT * FROM links WHERE target_dict=? AND target_id=? AND source_dict IN "+"('"+"','".join(targetDicts)+"')"
-                else:
-                    query2 = "SELECT * FROM links WHERE target_dict=? AND target_id=?"
-                data2 = (d["id"], entry["link_id"])
-                c2 = linkDB.execute(query2, data2)
-                for r2 in c2.fetchall():
-                    info = info0.copy()
-                    info["targetDict"] = r2["source_dict"]
-                    info["confidence"] = r2["confidence"]
-                    try:
-                        sourceDB = getDB(r2["source_dict"])
-                    except IOError:
-                        sourceDB = None
-                    if sourceDB:
-                        info["targetLang"] = readDictConfigs(sourceDB)['ident']['lang']
-                        info["targetDictConcept"] = False
-                        if r2["source_element"] == "sense" and "_" in r2["source_id"]:
-                            lia = r2["source_id"].split("_")
-                            info["targetSense"] = lia[1]
-                        query3 = "SELECT DISTINCT l.entry_id AS entry_id, l.txt AS link_id, l.element AS link_el, s.txt AS hw, l.preview as preview FROM searchables AS s, linkables AS l  WHERE s.entry_id=l.entry_id AND l.txt=?"
-                        c3 = sourceDB.execute(query3, (r2["source_id"],))
-                        for r3 in c3.fetchall():
-                            info["targetHeadword"] = r3["hw"]
-                            info["targetID"] = r3["entry_id"]
-                            info["targetPreview"] = r3["preview"]
-                            info["targetURL"] = siteconfig["baseUrl"] + info["targetDict"] + "/" + str(info["targetID"])
-                            links.append(info)
-                    else:
-                        info["targetHeadword"] = r2["source_id"]
-                        info["targetID"] = r2["source_id"]
-                        info["targetDictConcept"] = True
-                        info["targetURL"] = ""
-                        info["targetSense"] = ""
-                        info["targetLang"] = ""
-                        info["targetPreview"] = ""
-                        links.append(info)
-        else:
-            # source dictionary is "concept", use headword as target_id
-            info0 = {"sourceDict": d["id"], "sourceHeadword": headword, "sourceID": headword, "sourceDictConcept": True, "sourceURL": "", "sourceSense": ""}
-            # first, find links with searched dict as source
-            if targetLang:
-                targetDicts = []
-                for td in getDictList(targetLang, True):
-                    targetDicts.append(td["id"])
-                query2 = "SELECT * FROM links WHERE source_dict=? AND source_id=? AND target_dict IN "+"('"+"','".join(targetDicts)+"')"
-            else:
-                query2 = "SELECT * FROM links WHERE source_dict=? AND source_id=?"
-            data2 = (d["id"], headword)
-            c2 = linkDB.execute(query2, data2)
-            for r2 in c2.fetchall():
-                info = info0.copy()
-                info["targetDict"] = r2["target_dict"]
-                info["confidence"] = r2["confidence"]
-                try:
-                    targetDB = getDB(r2["target_dict"])
-                except IOError:
-                    targetDB = None
-                if targetDB:
-                    info["targetLang"] = readDictConfigs(targetDB)['ident']['lang']
-                    info["targetDictConcept"] = False
-                    if r2["target_element"] == "sense" and "_" in r2["target_id"]:
-                        lia = r2["target_id"].split("_")
-                        info["targetSense"] = lia[1]
-                    query3 = "SELECT DISTINCT l.entry_id AS entry_id, l.txt AS link_id, l.element AS link_el, s.txt AS hw, l.preview as preview FROM searchables AS s, linkables AS l  WHERE s.entry_id=l.entry_id AND l.txt=? AND s.level=(SELECT MIN(level) FROM searchables WHERE entry_id=l.entry_id)"
-                    c3 = targetDB.execute(query3, (r2["target_id"],))
-                    for r3 in c3.fetchall():
-                        info["targetHeadword"] = r3["hw"]
-                        info["targetID"] = r3["entry_id"]
-                        info["targetPreview"] = r3["preview"]
-                        info["targetURL"] = siteconfig["baseUrl"] + info["targetDict"] + "/" + str(info["targetID"])
-                        links.append(info)
-                else:
-                    info["targetHeadword"] = r2["target_id"]
-                    info["targetID"] = r2["target_id"]
-                    info["targetDictConcept"] = True
-                    info["targetURL"] = ""
-                    info["targetSense"] = ""
-                    info["targetLang"] = ""
-                    info["targetPreview"] = ""
-                    links.append(info)
-            # second, find links with search dict as target
-            if targetLang:
-                query2 = "SELECT * FROM links WHERE target_dict=? AND target_id=? AND source_dict IN "+"('"+"','".join(targetDicts)+"')"
-            else:
-                query2 = "SELECT * FROM links WHERE target_dict=? AND target_id=?"
-            data2 = (d["id"], headword)
-            c2 = linkDB.execute(query2, data2)
-            for r2 in c2.fetchall():
-                info = info0.copy()
-                info["targetDict"] = r2["source_dict"]
-                info["confidence"] = r2["confidence"]
-                try:
-                    sourceDB = getDB(r2["source_dict"])
-                except IOError:
-                    sourceDB = None
-                if sourceDB:
-                    info["targetLang"] = readDictConfigs(sourceDB)['ident']['lang']
-                    info["targetDictConcept"] = False
-                    if r2["source_element"] == "sense" and "_" in r2["source_id"]:
-                        lia = r2["source_id"].split("_")
-                        info["targetSense"] = lia[1]
-                    query3 = "SELECT DISTINCT l.entry_id AS entry_id, l.txt AS link_id, l.element AS link_el, s.txt AS hw, l.preview as preview FROM searchables AS s, linkables AS l  WHERE s.entry_id=l.entry_id AND l.txt=? AND s.level=(SELECT MIN(level) FROM searchables WHERE entry_id=l.entry_id)"
-                    c3 = sourceDB.execute(query3, (r2["source_id"], ))
-                    for r3 in c3.fetchall():
-                        info["targetHeadword"] = r3["hw"]
-                        info["targetID"] = r3["entry_id"]
-                        info["targetPreview"] = r3["preview"]
-                        info["targetURL"] = siteconfig["baseUrl"] + info["targetDict"] + "/" + str(info["targetID"])
-                        links.append(info)
-                else:
-                    info["targetHeadword"] = r2["source_id"]
-                    info["targetID"] = r2["source_id"]
-                    info["targetDictConcept"] = True
-                    info["targetURL"] = ""
-                    info["targetSense"] = ""
-                    info["targetLang"] = ""
-                    info["targetPreview"] = ""
-                    links.append(info)
-
-    # add dictionary titles
-    dictUsed = {}
-    for link in links:
-        dictTitle = link["sourceDict"]
-        if link["sourceDict"] in dictUsed:
-            dictTitle = dictUsed[link["sourceDict"]]
-        else:
-            try:
-                dictDB = getDB(link["sourceDict"])
-            except IOError:
-                dictDB = None
-            if dictDB:
-                dictConf = readDictConfigs(dictDB)
-                dictConf = loadHandleMeta(dictConf)
-                if dictConf["metadata"].get("dc.title"):
-                    dictTitle = dictConf["metadata"]["dc.title"]
-                else:
-                    dictTitle = dictConf["ident"]["title"]
-                dictUsed[link["sourceDict"]] = dictTitle
-        link["sourceDictTitle"] = dictTitle
-        dictTitle = link["targetDict"]
-        if link["targetDict"] in dictUsed:
-            dictTitle = dictUsed[link["targetDict"]]
-        else:
-            try:
-                dictDB = getDB(link["targetDict"])
-            except IOError:
-                dictDB = None
-            if dictDB:
-                dictConf = readDictConfigs(dictDB)
-                dictConf = loadHandleMeta(dictConf)
-                if dictConf["metadata"].get("dc.title"):
-                    dictTitle = dictConf["metadata"]["dc.title"]
-                else:
-                    dictTitle = dictConf["ident"]["title"]
-                dictUsed[link["targetDict"]] = dictTitle
-        link["targetDictTitle"] = dictTitle
-
-    return links
 
 def listUsers(searchtext: str, howmany: int) -> UserList:
     with getMainDB() as conn:
@@ -2498,14 +2098,6 @@ def flagForUpdate(dictDB: Connection) -> int:
     dictDB.commit()
     return (c.rowcount > 0)
 
-def makeQuery(lemma: str):
-    words: list[str] = []
-    for w in lemma.split(" "):
-        if w != "":
-            words.append('[lc="'+w+'"|lemma_lc="'+w+'"]')
-    ret = "aword," + "".join(words)
-    return ret
-
 def getEntryLinks(dictDB: Connection, dictID: str, entryID: int):
     ret = {"out": [], "in": []}
     cl = dictDB.execute("SELECT count(*) as count FROM sqlite_master WHERE type='table' and name='linkables'")
@@ -2533,6 +2125,9 @@ def readDictHistory(dictDB: Connection, dictID: str, configs: Configs, entryID: 
     c = dictDB.execute("select * from history where entry_id=? order by [when] desc", (entryID,))
     for row in c.fetchall():
         xml = row["xml"]
+        historiography = json.loads(row["historiography"])
+        if historiography.pop("apikey", None):
+            historiography["viaApi"] = True
         history.append({
             "entry_id": row["entry_id"],
             "revision_id": row["id"],
@@ -2541,22 +2136,9 @@ def readDictHistory(dictDB: Connection, dictID: str, configs: Configs, entryID: 
             "action": row["action"],
             "when": row["when"],
             "email": row["email"] or "",
-            "historiography": json.loads(row["historiography"])
+            "historiography": historiography
         })
     return history
-
-def verifyUserApiKey(email: str, apikey: str):
-    with getMainDB() as conn:
-        if email == '':
-            c = conn.execute("select email from users where apiKey=?", (apikey,))
-            row = c.fetchone()
-        else:
-            c = conn.execute("select email from users where email=? and apiKey=?", (email, apikey))
-            row = c.fetchone()
-        if not row or siteconfig["readonly"]:
-            return {"valid": False}
-        else:
-            return {"valid": True, "email": email or ""}
 
 def links_add(source_dict: str, source_el: str, source_id: str, target_dict: str, target_el: str, target_id: str, confidence: float=0, conn: Optional[Connection]=None):
     if not conn:
@@ -2693,109 +2275,6 @@ def getDictLinkables(dictDB: Connection):
             ret.append({"element": r["element"], "link": r["txt"], "entry": r["entry_id"], "preview": r["preview"]})
     return ret
 
-def isrunning(dictDB: Connection, bgjob: str, pid: Optional[int]=None):
-    if not pid:
-        c = dictDB.execute("SELECT pid FROM bgjobs WHERE id=?", (bgjob,))
-        job = c.fetchone()
-        if not job:
-            return False
-        pid = job["pid"]
-    if pid < 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    else:
-        return True
-
-def linkNAISC(dictDB, dictID, configs, otherdictDB, otherdictID, otherconfigs):
-    import subprocess
-    res = isLinking(dictDB)
-    if "otherdictID" in res:
-        return res
-    c = dictDB.execute("INSERT INTO bgjobs (type, data) VALUES ('naisc-local', ?)", (otherdictID,))
-    dictDB.commit()
-    jobid = c.lastrowid
-    errfile = open("/tmp/linkNAISC-%s-%s.err" % (dictID, otherdictID), "w")
-    outfile = open("/tmp/linkNAISC-%s-%s.out" % (dictID, otherdictID), "w")
-    bgjob = subprocess.Popen(['adminscripts/linkNAISC.sh', siteconfig["dataDir"], dictID, otherdictID, siteconfig["naiscCmd"], str(jobid)],
-        start_new_session=True, close_fds=True, stderr=errfile, stdout=outfile, stdin=subprocess.DEVNULL)
-    dictDB.execute("UPDATE bgjobs SET pid=? WHERE id=?", (bgjob.pid, jobid))
-    dictDB.commit()
-    return {"bgjob": jobid}
-
-def autoImage(dictDB, dictID, configs, addElem, addNumber):
-    import subprocess
-    res = isAutoImage(dictDB)
-    if res["bgjob"] and res["bgjob"] > 0:
-        return res
-    c = dictDB.execute("INSERT INTO bgjobs (type, data) VALUES ('autoimage', 'autoimage')")
-    dictDB.commit()
-    jobid = c.lastrowid
-    errfile = open("/tmp/autoImage-%s.err" % (dictID), "w")
-    outfile = open("/tmp/autoImage-%s.out" % (dictID), "w")
-    bgjob = subprocess.Popen(['adminscripts/autoImage.py', siteconfig["dataDir"], dictID, addElem, str(addNumber), str(jobid)],
-        start_new_session=True, close_fds=True, stderr=errfile, stdout=outfile, stdin=subprocess.DEVNULL)
-    dictDB.execute("UPDATE bgjobs SET pid=? WHERE id=?", (bgjob.pid, jobid))
-    dictDB.commit()
-    return {"bgjob": jobid}
-
-def isLinking(dictDB):
-    c = dictDB.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='bgjobs'")
-    if not c.fetchone():
-        dictDB.execute("CREATE TABLE bgjobs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, finished INTEGER DEFAULT -1, pid DEFAULT -1)")
-        dictDB.commit()
-    c = dictDB.execute("SELECT * FROM bgjobs WHERE finished=-1")
-    job = c.fetchone()
-    if job:
-        pid = job["pid"]
-        if isrunning(dictDB, job["id"], pid):
-            return {"bgjob": job["id"], "otherdictID": job["data"]}
-        else: # mark as dead
-            c = dictDB.execute("UPDATE bgjobs SET finished=-2 WHERE pid=?", (pid,))
-    return {"bgjob": -1}
-
-def isAutoImage(dictDB):
-    c = dictDB.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='bgjobs'")
-    if not c.fetchone():
-        dictDB.execute("CREATE TABLE bgjobs (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, data TEXT, finished INTEGER DEFAULT -1, pid DEFAULT -1)")
-        dictDB.commit()
-    c = dictDB.execute("SELECT * FROM bgjobs WHERE finished=-1 AND data='autoimage'")
-    job = c.fetchone()
-    if job:
-        pid = job["pid"]
-        if isrunning(dictDB, job["id"], pid):
-            return {"bgjob": job["id"]}
-        else: # mark as dead
-            c = dictDB.execute("UPDATE bgjobs SET finished=-2 WHERE pid=?", (pid,))
-    return {"bgjob": -1}
-
-
-def getNAISCstatus(dictDB, dictID, otherdictID, bgjob):
-    try:
-        err = open("/tmp/linkNAISC-%s-%s.err" % (dictID, otherdictID))
-    except:
-        return None
-    if "[COMPLETED] Done\n" in err.readlines():
-        return {"status": "finished"}
-    if isrunning(dictDB, bgjob):
-        return {"status": "linking"}
-    else:
-        return {"status": "failed"}
-
-def autoImageStatus(dictDB, dictID, bgjob):
-    try:
-        out = open("/tmp/autoImage-%s.out" % (dictID))
-    except:
-        return None
-    if "COMPLETED\n" in out.readlines():
-        return {"status": "finished"}
-    if isrunning(dictDB, bgjob):
-        return {"status": "working"}
-    else:
-        return {"status": "failed"}
-
 def addAutoNumbers(dictDB: Connection, configs: Configs, user: User):
     """Runs the autonumbering operation in manual mode"""
     config = configs.get("autonumbering")
@@ -2863,474 +2342,4 @@ def get_locales():
     for code in Locale().getAvailableLocales():
         codes.append({'code': code, 'lang': Locale(code).getDisplayName()})
     return codes
-
-def extractText(xml, elName):
-    elName = str(elName)
-    if elName == "":
-        return []
-    pat = r"<" + elName + "[^>]*>([^<]*)</" + elName + ">"
-    return re.findall(pat, xml)
-
-def extractFirstText(xml):
-    pat = r"<([^\s>]+)[^>]*>([^<>]*?)</([^\s>]+)>"
-    for match in re.findall(pat, xml):
-        if match[0] == match[2] and match[1].strip() != "":
-            return match[1].strip()
-    return ""
-
-def getEntryHeadword(xml, headword_elem):
-    ret = "?"
-    arr = extractText(xml, headword_elem)
-    if len(arr)>0:
-        ret = arr[0]
-    else:
-        ret = extractFirstText(xml)
-    if len(ret) > 255:
-        ret = ret[0:255]
-    return ret
-
-def importBabelnetLinks(dictID, dictDB, links):
-    count = 0
-    count_error = 0
-    errors = []
-    linkDB = getLinkDB()
-    linkDB.execute('DELETE FROM links WHERE source_dict=? AND target_dict=?', (dictID, 'BABELNET'))
-    linkDB.commit()
-    for linkentry in links:
-        if isinstance(linkentry['linking'], list):
-            for link in linkentry['linking']:
-                if link['source_sense']:
-                    c = dictDB.execute('SELECT * FROM linkables WHERE preview=?', (link['source_sense']['definition'], ))
-                    res = c.fetchone()
-                    if res:
-                        links_add(dictID, res['element'], res['txt'], 'BABELNET', 'sense', link['target_sense'][0], float(link['score']), linkDB)
-                        count += 1
-        else:
-            count_error += 1
-            errors.append(linkentry['linking'])
-    linkDB.close()
-    return count, count_error, list(set(errors))
-
-def preprocessLex0(entryXml):
-    from xml.dom import minidom, Node
-    doc = minidom.parseString(entryXml)
-    headword = None
-    for el in doc.getElementsByTagName("form"):
-        if el.getAttribute("type") == "lemma":
-            for el2 in el.getElementsByTagName("orth"):
-                headword = el2.firstChild.nodeValue
-    if headword and headword != "":
-        he = doc.createElement("headword")
-        het = doc.createTextNode(headword)
-        doc.documentElement.appendChild(he)
-        he.appendChild(het)
-    return doc.toxml().replace('<?xml version="1.0" ?>', '').strip()
-
-def listOntolexEntries(dictDB: Connection, dictID: str, configs: Configs, doctype: str, searchtext: str=""):
-    from lxml import etree as ET
-    if searchtext == "":
-        sql = "select id, title, sortkey, xml from entries where doctype=? order by id"
-        params = (doctype, )
-    else:
-        sql = "select s.txt, min(s.level) as level, e.id, e.sortkey, e.title, e.xml from searchables as s inner join entries as e on e.id=s.entry_id where doctype=? and s.txt like ? group by e.id order by e.id"
-        params = (doctype, searchtext+"%")
-    c = dictDB.execute(sql, params)
-    for r in c.fetchall():
-        xml = parse(r["xml"])
-        headword = get_entry_headword(xml, configs)
-        headword = headword.replace('"', "'")
-        lang = configs["ident"].get("lang", "") or "en"
-        entryId = re.sub("[\\W_]", "",  headword) + "_" + str(r["id"])
-        line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/ns/lemon/ontolex#LexicalEntry> ."
-        yield line; yield "\n"
-        line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/2000/01/rdf-schema#label> \"" + headword + "\"@" + lang + " ."
-        yield line; yield "\n"
-
-        #just guessing and hoping
-        root = ET.fromstring(r["xml"])
-        num = 0
-        for sense in root.findall("sense"):
-            senseDef = sense.find("def")
-            if senseDef != None and senseDef.text:
-                defText = re.sub(r'[\r\n]', ' ', senseDef.text)
-            elif sense.text:
-                defText = re.sub(r'[\r\n]', ' ', sense.text)
-            else:
-                defText = ""
-            if defText != "":
-                num += 1
-                defText = defText.replace('"', "'")
-                if sense.get("{http://www.w3.org/XML/1998/namespace}id"):
-                    senseId = "sense:" + sense.get("{http://www.w3.org/XML/1998/namespace}id")
-                else:
-                    senseId = "sense:" + str(r["id"]) + "_" + str(num)
-                line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/ns/lemon/ontolex#sense> <" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> ."
-                yield line; yield "\n"
-                line = "<" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> <http://www.w3.org/2004/02/skos/core#definition> \"" + defText + "\"@" + lang + " ."
-                yield line; yield "\n"
-        for sense in root.findall("meaning"):
-            senseDef = sense.find("def")
-            senseDesc = sense.find("semDescription")
-            if senseDef != None and senseDef.text:
-                defText = re.sub(r'[\r\n]', ' ', senseDef.text)
-            elif senseDesc != None and senseDesc.text:
-                defText = re.sub(r'[\r\n]', ' ', senseDesc.text)
-            elif sense.text:
-                defText = re.sub(r'[\r\n]', ' ', sense.text)
-            else:
-                defText = ""
-            if defText != "":
-                num += 1
-                defText = defText.replace('"', "'")
-                senseId = 'meaning:' + str(r["id"]) + "_" + str(num)
-                line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/ns/lemon/ontolex#sense> <" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> ."
-                yield line; yield "\n"
-                line = "<" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> <http://www.w3.org/2004/02/skos/core#definition> \"" + defText + "\"@" + lang + " ."
-                yield line; yield "\n"
-        for sense in root.findall("def"):
-            if sense.text:
-                num += 1
-                defText = re.sub(r'[\r\n]', ' ', sense.text)
-                defText = defText.replace('"', "'")
-                senseId = 'def:' + str(r["id"]) + "_" + str(num)
-                line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/ns/lemon/ontolex#sense> <" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> ."
-                yield line; yield "\n"
-                line = "<" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> <http://www.w3.org/2004/02/skos/core#definition> \"" + defText + "\"@" + lang + " ."
-                yield line; yield "\n"
-        # no sense detected, copy headword
-        if num == 0:
-            defText = re.sub(r'[\r\n]', ' ', headword)
-            defText = defText.replace('"', "'")
-            senseId = 'entry:' + str(r["id"]) + "_1"
-            line = "<" + siteconfig["baseUrl"] + dictID + "#" + entryId + "> <http://www.w3.org/ns/lemon/ontolex#sense> <" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> ."
-            yield line; yield "\n"
-            line = "<" + siteconfig["baseUrl"] + dictID + "#" + senseId + "> <http://www.w3.org/2004/02/skos/core#definition> \"" + defText + "\"@" + lang + " ."
-            yield line; yield "\n"
-
-def elexisDictAbout(dictID: str):
-    try:
-        dictDB = getDB(dictID)
-    except IOError:
-        return None
-
-    info = {"id": dictID}
-    configs = readDictConfigs(dictDB)
-    configs = loadHandleMeta(configs)
-    if configs["metadata"].get("dc.language.iso") and len(configs["metadata"]["dc.language.iso"]) > 0:
-        info["sourceLanguage"] = configs["metadata"]["dc.language.iso"][0]
-        info["targetLanguage"] = configs["metadata"]["dc.language.iso"]
-    elif configs['ident'].get('lang'):
-        info["sourceLanguage"] = configs['ident'].get('lang')
-        info["targetLanguage"] = [configs['ident'].get('lang')]
-    else:
-        info["sourceLanguage"] = 'en'
-        info["targetLanguage"] = ['en']
-    if configs["metadata"].get("dc.rights"):
-        if configs["metadata"].get("dc.rights.label") == "PUB":
-            info["release"] = "PUBLIC"
-            if configs["metadata"].get("dc.rights.uri") != "":
-                info["license"] = configs["metadata"].get("dc.rights.uri")
-            else:
-                info["license"] = configs["metadata"].get("dc.rights")
-        else:
-            info["release"] = "PRIVATE"
-            info["license"] = ""
-    else:
-        if configs["publico"]["public"]:
-            info["release"] = "PUBLIC"
-            info["license"] = configs["publico"]["licence"]
-            if siteconfig["licences"][configs["publico"]["licence"]]:
-                info["license"] = siteconfig["licences"][configs["publico"]["licence"]]["url"]
-        else:
-            info["release"] = "PRIVATE"
-    info["creator"] = []
-    info["publisher"] = []
-    if configs["metadata"].get("dc.contributor.author"):
-        for auth in configs["metadata"]["dc.contributor.author"]:
-            info["creator"].append({"name": auth})
-    else:
-        for user in configs["users"]:
-            info["creator"].append({"email": user})
-    if configs["metadata"].get("dc.publisher"):
-        info["publisher"] = [{"name": configs["metadata"]["dc.publisher"]}]
-    if configs["metadata"].get("dc.title"):
-        info["title"] = configs["metadata"]["dc.title"]
-    else:
-        info["title"] = configs["ident"]["title"]
-    if configs["metadata"].get("dc.description"):
-        info["abstract"] = configs["metadata"]["dc.description"]
-    else:
-        info["abstract"] = configs["ident"]["blurb"]
-    if configs["metadata"].get("dc.date.issued"):
-        info["issued"] = configs["metadata"]["dc.date.issued"]
-    info["genre"] = ["gen"]
-    if configs["metadata"].get("dc.subject"):
-        info["subject"] = '; '.join(configs["metadata"]["dc.subject"])
-        if "terminolog" in info["subject"]:
-            info["genre"].append("trm")
-        if "etymolog" in info["subject"]:
-            info["genre"].append("ety")
-        if "historical" in info["subject"]:
-            info["genre"].append("his")
-    c = dictDB.execute("select count(*) as total from entries")
-    r = c.fetchone()
-    info["entryCount"] = r['total']
-    return info
-
-
-def elexisLemmaList(dictID, limit=None, offset=0):
-    try:
-        dictDB = getDB(dictID)
-    except IOError:
-        return None
-
-    info = {"language": "en", "release": "PRIVATE"}
-    configs = readDictConfigs(dictDB)
-    configs = loadHandleMeta(configs)
-    if configs["metadata"].get("dc.language.iso") and len(configs["metadata"]["dc.language.iso"]) > 0:
-        info["language"] = configs["metadata"]["dc.language.iso"][0]
-    elif configs['ident'].get('lang'):
-        info["language"] = configs['ident'].get('lang')
-    if configs["metadata"].get("dc.rights"):
-        if configs["metadata"].get("dc.rights.label") == "PUB":
-            info["release"] = "PUBLIC"
-        else:
-            info["release"] = "PRIVATE"
-    else:
-        if configs["publico"]["public"]:
-            info["release"] = "PUBLIC"
-        else:
-            info["release"] = "PRIVATE"
-    lemmas = []
-    query = "SELECT id, xml FROM entries"
-    if limit != None and limit != "":
-        query += " LIMIT "+str(int(limit))
-    if offset != "" and int(offset) > 0:
-        query += " OFFSET "+str(int(offset))
-    c = dictDB.execute(query)
-    formats = []
-    firstentry = True
-    for r in c.fetchall():
-        if firstentry:
-            firstentry = False
-            jsonentry = elexisConvertTei(r["xml"])
-            if jsonentry != None:
-                formats = ["tei", "json"]
-        lemma = {"release": info["release"], "language": info["language"], "formats": formats}
-        lemma["id"] = str(r["id"])
-        lemma["lemma"] = getEntryHeadword(r["xml"], configs["titling"].get("headword"))
-        pos = elexisGuessPOS(r["xml"])
-        if pos != "":
-            lemma["partOfSpeech"] = [pos]
-        lemmas.append(lemma)
-    return lemmas
-
-def elexisGetLemma(dictID, headword, limit=None, offset=0):
-    try:
-        dictDB = getDB(dictID)
-    except IOError:
-        return None
-
-    info = {"language": "en", "release": "PRIVATE"}
-    configs = readDictConfigs(dictDB)
-    configs = loadHandleMeta(configs)
-    if configs["metadata"].get("dc.language.iso") and len(configs["metadata"]["dc.language.iso"]) > 0:
-        info["language"] = configs["metadata"]["dc.language.iso"][0]
-    elif configs['ident'].get('lang'):
-        info["language"] = configs['ident'].get('lang')
-    if configs["metadata"].get("dc.rights"):
-        if configs["metadata"].get("dc.rights.label") == "PUB":
-            info["release"] = "PUBLIC"
-        else:
-            info["release"] = "PRIVATE"
-    else:
-        if configs["publico"]["public"]:
-            info["release"] = "PUBLIC"
-        else:
-            info["release"] = "PRIVATE"
-    lemmas = []
-    query = "SELECT e.id, e.xml FROM searchables AS s INNER JOIN entries AS e on e.id=s.entry_id WHERE doctype=? AND s.txt=? GROUP BY e.id ORDER by s.level"
-    params = (configs["xema"]["root"], headword)
-    if limit != None and limit != "":
-        query += " LIMIT "+str(int(limit))
-    if offset != "" and int(offset) > 0:
-        query += " OFFSET "+str(int(offset))
-    c = dictDB.execute(query, params)
-    formats = []
-    firstentry = True
-    for r in c.fetchall():
-        if firstentry:
-            firstentry = False
-            jsonentry = elexisConvertTei(r["xml"])
-            if jsonentry != None:
-                formats = ["tei", "json"]
-        lemma = {"release": info["release"], "language": info["language"], "formats": formats}
-        lemma["id"] = str(r["id"])
-        lemma["lemma"] = getEntryHeadword(r["xml"], configs["titling"].get("headword"))
-        pos = elexisGuessPOS(r["xml"])
-        if pos != "":
-            lemma["partOfSpeech"] = [pos]
-        lemmas.append(lemma)
-    return lemmas
-
-
-def elexisGuessPOS(xml):
-    # try to guess frequent PoS element
-    pos = ""
-    if "</pos>" in xml:
-        arr = extractText(xml, "pos")
-        if arr[0] and arr[0] != "":
-            pos = arr[0]
-    if "<partOfSpeech>" in xml:
-        arr = extractText(xml, "partOfSpeech")
-        if arr[0] and arr[0] != "":
-            pos = arr[0]
-    if 'type="pos"' in xml:
-        pat = r'<gram[^>]*type="pos"[^>]*>([^<]*)</gram>'
-        arr = re.findall(pat, xml)
-        if arr and arr[0] and arr[0] != "":
-            pos = arr[0]
-    return pos
-
-def elexisGetEntry(dictID, entryID):
-    try:
-        dictDB = getDB(dictID)
-    except IOError:
-        return None
-
-    query = "SELECT id, xml FROM entries WHERE id=?"
-    c = dictDB.execute(query, (entryID, ))
-    r = c.fetchone()
-    return r['xml'] if r["xml"] else None
-
-
-def loadHandleMeta(configs: Configs):
-    configs["metadata"] = {}
-    if configs["ident"].get("handle") and "hdl.handle.net" in configs["ident"].get("handle"):
-
-        handle = configs["ident"].get("handle").replace("hdl.handle.net", "hdl.handle.net/api/handles")
-        res = requests.get(handle)
-        data = res.json()
-        if data.get('values') and data["values"][0] and data["values"][0]["type"] == "URL":
-            repourl = data["values"][0]["data"]["value"].replace("xmlui", "rest")
-            res2 = requests.get(repourl)
-            data2 = res2.json()
-            if data2.get("id") != "":
-                urlparsed = urllib.parse.urlparse(repourl)
-                repourl2: str = urlparsed.scheme + "://" + urlparsed.hostname + "/repository/rest/items/" + str(data2["id"]) + "/metadata"
-                res3 = requests.get(repourl2)
-                data3 = res3.json()
-                for item in data3:
-                    if item["key"] == "dc.contributor.author" or item["key"] == "dc.subject" or item["key"] == "dc.language.iso":
-                        if not configs["metadata"].get(item["key"]):
-                            configs["metadata"][item["key"]] = []
-                        configs["metadata"][item["key"]].append(item["value"])
-                    else:
-                        configs["metadata"][item["key"]] = item["value"]
-    return configs
-
-def elexisConvertTei(xml_entry):
-    """Convert a TEI entry into Json, return None if not TEI
-    xml_entry: The entry as a string"""
-    from io import BytesIO
-    from lxml import etree as ET
-    try:
-        # strip NS
-        it = ET.iterparse(BytesIO(xml_entry.encode("UTF-8")), recover=True)
-        for _, el in it:
-            _, _, el.tag = el.tag.rpartition('}')
-        doc = it.root
-
-        entry = {}
-        for form_elem in doc.iter("form"):
-            if form_elem.attrib["type"] == "lemma":
-                for orth_elem in form_elem.iter("orth"):
-                    if "canonicalForm" not in entry:
-                        entry["canonicalForm"] = {"writtenRep": orth_elem.text}
-        for gramgrp_elem in doc.iter("gramGrp"):
-            for gram in gramgrp_elem.iter("gram"):
-                if gram.attrib["type"] == "pos":
-                    if "norm" in gram.attrib:
-                        entry["partOfSpeech"] = elexisNormalisePos(gram.attrib["norm"])
-                    else:
-                        entry["partOfSpeech"] = elexisNormalisePos(gram.text)
-
-        entry["senses"] = []
-        for sense_elem in doc.iter("sense"):
-            sense = {}
-            for defn in sense_elem.iter("def"):
-                sense["definition"] = defn.text
-            entry["senses"].append(sense)
-        if "canonicalForm" in entry:
-            return entry
-        else:
-            return None
-    except Exception as e:
-        return None
-
-def elexisConvertAll(dictID):
-    """Get all entries in dictionary and convert them to TEI JSON
-    dictID: dictionary ID"""
-    try:
-        dictDB = getDB(dictID)
-    except IOError:
-        return None
-
-    result = []
-    query = "SELECT id, xml FROM entries WHERE doctype='entry'"
-    c = dictDB.execute(query)
-    for r in c.fetchall():
-        json = elexisConvertTei(r['xml'])
-        if json != None:
-            result.append(json)
-    return result
-
-def elexisNormalisePos(pos):
-    if pos in ["adjective", "adposition", "adverb", "auxiliary",
-            "coordinatingConjunction", "determiner", "interjection",
-            "commonNoun", "numeral", "particle", "pronoun", "properNoun",
-            "punctuation", "subordinatingConjunction", "symbol", "verb",
-            "other"]:
-        return pos
-    pos = pos.upper().strip(' .')
-    if pos == "ADJ":
-        return "adjective"
-    elif pos == "ADP":
-        return "adposition"
-    elif pos == "ADV":
-        return "adverb"
-    elif pos == "AUX" :
-        return "auxiliary"
-    elif pos == "CCONJ" :
-        return "coordinatingConjunction"
-    elif pos == "DET":
-        return "determiner"
-    elif pos == "INTJ" :
-        return "interjection"
-    elif pos == "NN":
-        return "commonNoun"
-    elif pos == "NOUN":
-        return "commonNoun"
-    elif pos == "NUM":
-        return "numeral"
-    elif pos == "PART":
-        return "particle"
-    elif pos == "PRON":
-        return "pronoun"
-    elif pos == "PROPN":
-        return "properNoun"
-    elif pos == "PUNCT":
-        return "punctuation"
-    elif pos == "SCONJ":
-        return "subordinatingConjunction"
-    elif pos == "SYM":
-        return "symbol"
-    elif pos == "VB":
-        return "verb"
-    elif pos == "VERB":
-        return "verb"
-    elif pos == "X":
-        return "other"
-    else:
-        return "other"
 

@@ -91,14 +91,6 @@ Upon start, Lexonomy creates three subdirectories automatically:
 
 If you set this to `true` Lexonomy will report each HTTP request (except requests for static files) to standard error output (= to the command line or terminal) – useful for debugging.
 
-### Tracking code
-
-```js
-"trackingCode": ""
-```
-
-This is an HTML snippet which Lexonomy inserts into every public-facing web page. You can replace it with your own tracking code from Google Analytics, StatCounter or whatever other web analytics service you use, or leave it blank.
-
 ### Welcome message
 
 ```js
@@ -128,6 +120,8 @@ python3 lexonomy.py
 ```
 
 Open [http://localhost:8000/](http://localhost:8000/) with the default configuration. For subsequent upgrades, rebuild the frontend and run `adminscripts/updates.py` and `migrate.py` before restarting the server. Docker runs these steps on startup.
+
+Accounts created through Sketch Engine can set a local password through **Forgot password?** when email is configured. An administrator with server access can also set a password with `python3 adminscripts/changePassword.py user@example.com` from `website`.
 
 ## Run the import tests
 

@@ -229,10 +229,11 @@ Screenful.Editor={
           var linkdata = links.out[link];
           var preview = linkdata["source_id"];
           if (linkdata["source_preview"] != "") preview = linkdata["source_preview"];
-          if (linkdata['target_hw'] != '') {
-            var linkhtml = '<ul>'+preview+' → <a target="_top" href="#/'+linkdata['target_dict']+'/edit/entry/'+linkdata['target_entry']+'/view?link='+linkdata['target_id']+'">'+linkdata['target_dict']+' : '+linkdata['target_el']+' : '+linkdata['target_id']+'</a>';
-          } else if (linkdata['target_entry'] != '') {
-            var linkhtml = '<ul>'+preview+' → <a target="_top" href="#/'+linkdata['target_dict']+'/edit/entry/'+linkdata['target_entry']+'/view?link='+linkdata['target_id']+'">'+linkdata['target_dict']+' : '+linkdata['target_el']+' : '+linkdata['target_id']+'</a>';
+          var targetLabel = linkdata['target_dict']+' : '+linkdata['target_el']+' : '+linkdata['target_id'];
+          if (linkdata['target_dict'] == 'BABELNET') {
+            var linkhtml = '<ul>'+preview+' → '+targetLabel;
+          } else if (linkdata['target_entry'] != '' || linkdata['target_hw'] != '') {
+            var linkhtml = '<ul>'+preview+' → <a target="_top" href="#/'+linkdata['target_dict']+'/edit/entry/'+linkdata['target_entry']+'/view?link='+linkdata['target_id']+'">'+targetLabel+'</a>';
           } else {
             var linkhtml = '<ul>'+preview+' → <a target="_top" href="#/'+linkdata['target_dict']+'">'+linkdata['target_dict']+'</a> : '+linkdata['target_el']+' : '+linkdata['target_id'];
           }

@@ -4,12 +4,8 @@
       <label v-if="isAttribute" class="text--md" :for="computedElementName">{{ computedElementNameWithColon }}</label>
       <input :name="computedElementName" type="text" v-model="value"
              @change="updateParent">
-      <button class="button--sm secondary" @click="$refs.imageSearcher.toggleOpen()" style="margin-left: 8px">
-        <img :src="iconUrl('search-image.svg')">
-      </button>
     </section>
 
-    <ImageSearcher v-if="elementData.shown && !readOnly" ref="imageSearcher" @selected="updateValue"/>
     <section v-if="elementData.shown && readOnly" class="read-only">
       <p v-if="showPreview" :class="computedClass">{{ computedElementNameWithColon }} </p>
       <span :class="computedClass">{{ value }}</span>
@@ -19,13 +15,10 @@
 
 <script>
 import computedElementName from "@/shared-resources/mixins/computedElementName"
-import ImageSearcher from "@/components/ImageSearcher"
 import showPreview from "@/shared-resources/mixins/showPreview"
-import iconUrl from "@/shared-resources/mixins/iconUrl"
 
 export default {
   name: "MediaComponent",
-  components: {ImageSearcher},
   props: {
     elementData: Object,
     elementName: String,
@@ -34,16 +27,10 @@ export default {
       required: true
     }
   },
-  mixins: [computedElementName, showPreview, iconUrl],
-  computed: {
-    isMultimediaAPI() {
-      return true
-    }
-  },
+  mixins: [computedElementName, showPreview],
   data() {
     return {
       value: ""
-
     }
   },
   mounted() {
@@ -63,10 +50,6 @@ export default {
           this.$emit('input', {elementName: this.elementName, elements: [elements]})
         }
       })
-    },
-    updateValue(value) {
-      this.value = value
-      this.updateParent()
     }
   }
 }
@@ -85,20 +68,6 @@ export default {
     text-transform: capitalize;
     padding-right: 10px;
     color: inherit;
-  }
-
-  button {
-    font-size: 28px;
-
-    img {
-      filter: invert(56%) sepia(100%) saturate(7500%) hue-rotate(203deg) brightness(90%) contrast(101%);
-    }
-
-    &:hover {
-      img {
-        filter: invert(100%) sepia(100%) saturate(0%) hue-rotate(268deg) brightness(104%) contrast(101%);
-      }
-    }
   }
 }
 

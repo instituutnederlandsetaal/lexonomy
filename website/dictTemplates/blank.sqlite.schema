@@ -5,8 +5,6 @@ CREATE TABLE configs (
 INSERT INTO configs VALUES('publico','{"public": false}');
 INSERT INTO configs VALUES('searchability','{"searchableElements": []}');
 INSERT INTO configs VALUES('editing','{"xonomyMode": "nerd"}');
-INSERT INTO configs VALUES('kex','{"url": "https://app.sketchengine.eu/", "apiurl": "https://api.sketchengine.eu/bonito/run.cgi"}');
-INSERT INTO configs VALUES('xampl','{"container": "",	"template": "",	"markup": ""}');
 INSERT INTO configs VALUES('xema','{"root": "entry","elements": {	"entry": {	"filling": "chd",		"values": [],"children": [],	"attributes": {}}}}');
 INSERT INTO configs VALUES('xemplate','{"entry": {"shown": false,	"layout": "block"	}}');
 CREATE TABLE searchables (

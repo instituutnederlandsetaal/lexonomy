@@ -10,15 +10,6 @@
          display: block;
          min-height: calc(100vh - 260px);
       }
-      .voicetts {
-         display: inline-block;
-         vertical-align: top;
-      }
-      .voicetts-icon img {
-         width: 30px;
-         cursor: pointer;
-         margin-left: 1em;
-      }
    </style>
 
    <script>
@@ -34,7 +25,6 @@
                   html = this.dictData.entry.contentHtml;
                }
                $('#viewer').html(html)
-               Gmedia.addVoicePublic(this.dictData.entry, this.dictData.config.gapi, this.dictData.config.titling);
             }
          },
 

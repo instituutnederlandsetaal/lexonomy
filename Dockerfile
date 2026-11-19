@@ -12,7 +12,7 @@ FROM python:3.12-alpine3.24
 WORKDIR /opt/service/website
 
 COPY website/requirements.txt ./
-RUN apk add --no-cache icu libxslt openjdk11-jre-headless sqlite \
+RUN apk add --no-cache icu libxslt \
     && apk add --no-cache --virtual .build-deps g++ icu-dev libxslt-dev \
     && pip install --no-cache-dir -r requirements.txt \
     && apk del .build-deps

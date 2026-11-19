@@ -15,20 +15,14 @@ import './libs/xonomy-tools/dtdconvert/dtd2xonomy.js'
 import './widgets/xematron.js'
 import './widgets/xemplatron.js'
 import './widgets/xrefs.js'
-import './widgets/ske.js'
-import './widgets/kontext.js'
-import './widgets/gmedia.js'
 import './widgets/sub.js'
 
 import App from './riot/main.riot'
-import api from './riot/api.riot'
 import dict_config_autonumber from './riot/dict-config-autonumber.riot'
 import dict_config_download from './riot/dict-config-download.riot'
 import dict_config_editing from './riot/dict-config-editing.riot'
 import dict_config_flagging from './riot/dict-config-flagging.riot'
-import dict_config_gapi from './riot/dict-config-gapi.riot'
 import dict_config_ident from './riot/dict-config-ident.riot'
-import dict_config_kontext from './riot/dict-config-kontext.riot'
 import dict_config_links from './riot/dict-config-links.riot'
 import dict_nav from './riot/dict-nav.riot'
 import dict_entry_filter from './riot/dict-entry-filter.riot'
@@ -36,7 +30,6 @@ import dict_entry_pagination from './riot/dict-entry-pagination.riot'
 import dict_config_buttons from './riot/dict-config-buttons.riot'
 import dict_config_publico from './riot/dict-config-publico.riot'
 import dict_config_searchability from './riot/dict-config-searchability.riot'
-import dict_config_ske from './riot/dict-config-ske.riot'
 import dict_config_subbing from './riot/dict-config-subbing.riot'
 import dict_config from './riot/dict-config.riot'
 import dict_config_titling from './riot/dict-config-titling.riot'
@@ -77,14 +70,11 @@ import loading_overlay from './riot/loading-overlay.riot'
 import docs_intro from './riot/docs-intro.riot'
 import docs_about from './riot/docs-about.riot'
 
-riot_register('api', api)
 riot_register('dict-config-autonumber', dict_config_autonumber)
 riot_register('dict-config-download', dict_config_download)
 riot_register('dict-config-editing', dict_config_editing)
 riot_register('dict-config-flagging', dict_config_flagging)
-riot_register('dict-config-gapi', dict_config_gapi)
 riot_register('dict-config-ident', dict_config_ident)
-riot_register('dict-config-kontext', dict_config_kontext)
 riot_register('dict-config-links', dict_config_links)
 riot_register('dict-nav', dict_nav)
 riot_register('dict-entry-filter', dict_entry_filter)
@@ -92,7 +82,6 @@ riot_register('dict-entry-pagination', dict_entry_pagination)
 riot_register('dict-config-buttons', dict_config_buttons)
 riot_register('dict-config-publico', dict_config_publico)
 riot_register('dict-config-searchability', dict_config_searchability)
-riot_register('dict-config-ske', dict_config_ske)
 riot_register('dict-config-subbing', dict_config_subbing)
 riot_register('dict-config', dict_config)
 riot_register('dict-config-titling', dict_config_titling)

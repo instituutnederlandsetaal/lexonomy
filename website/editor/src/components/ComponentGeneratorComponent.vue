@@ -4,8 +4,6 @@
         :key="typeElement.name"
     >
       <!--        :style="getEncompassingStyles(typeElement.name)"-->
-      <CorpusComponent v-if="useExampleEngine(typeElement.name)" :element-name="typeElement.name"
-                       @save="saveFromCorpus(typeElement, $event)"></CorpusComponent>
       <component v-for="element in typeElement.children"
                  :is="element.componentName"
                  :ref="element.props.elementName + element.props.editorChildNumber"
@@ -25,15 +23,10 @@
 
 <script>
 import {js2xml, xml2js} from "xml-js"
-import CorpusComponent from "@/components/CorpusComponent"
-import corpusMixin from "@/shared-resources/mixins/corpusMixin"
 
 export default {
   name: "ComponentGeneratorComponent",
   inject: ['$validator'],
-  components: {
-    CorpusComponent
-  },
   props: {
     children: Array,
     elementName: String,
@@ -54,9 +47,6 @@ export default {
       default: false
     }
   },
-  mixins: [
-    corpusMixin
-  ],
   data() {
     return {
       displayTypeToComponentMap: {
@@ -83,9 +73,6 @@ export default {
     this.loadNewData(this.content)
   },
   methods: {
-    useExampleEngine() {
-      return !this.showElementsPreview
-    },
     getEncompassingStyles(elementName) {
       let gutter = this.state.entry.dictConfigs.xemplate[elementName].gutter
       let listStyle = "none"

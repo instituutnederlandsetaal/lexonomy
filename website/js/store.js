@@ -517,87 +517,12 @@ class StoreClass {
             })
    }
 
-   loadCorpora(){
-      return $.ajax({
-         url: `${window.API_URL}skeget/corpora`
-      })
-            .fail(response => {
-               M.toast({html: "Could not load Sketch Engine corpora."})
-            })
-   }
-
-   loadKontextCorpora(){
-      return $.ajax({
-         url: `${window.API_URL}${this.data.dictId}/kontext/corpora`
-      })
-            .fail(response => {
-               M.toast({html: "Could not load Kontext corpora."})
-            })
-   }
-
    suggestUrl(){
       return $.ajax({
          url: `${window.API_URL}makesuggest.json`
       })
             .fail(response => {
                M.toast({html: "Could not generate URL of the new dictionary."})
-            })
-   }
-
-   autoAddImages(addElem, addNumber){
-      return $.ajax({
-         url: `${window.API_URL}${this.data.dictId}/autoimage.json`,
-         method: 'POST',
-         data: {
-            "addElem": addElem,
-            "addNumber": addNumber
-         }
-      })
-            .fail(response => {
-               M.toast({html: "Could not automatically add images."})
-            })
-   }
-
-   autoAddImagesGetProgress(jobId){
-      return $.ajax({
-         url: `${window.API_URL}${this.data.dictId}/autoimageprogress.json`,
-         data: {jobId: jobId}
-      })
-            .fail(response => {
-               M.toast({html: "Could not check image generation progress."})
-            })
-
-   }
-
-   startLinking(otherDictID){
-      return $.ajax({
-         url: `${window.API_URL}${this.data.dictId}/linknaisc.json`,
-         data: {otherdictID: otherDictID}
-      })
-            .fail(response => {
-               M.toast({html: "Could not initiate linking process."})
-            })
-   }
-
-   linkingCheckIfRunning(){
-      return $.ajax({
-         url: `${window.API_URL}${this.data.dictId}/linking.json`
-      })
-            .fail(response => {
-               M.toast({html: "Could not check linking process."})
-            })
-   }
-
-   linkingGetProgress(otherDictID, jobID){
-      return $.ajax({
-         url: `${window.API_URL}${this.data.dictId}/naiscprogress.json`,
-         data: {
-            otherdictID: otherDictID,
-            jobid: jobID
-         }
-      })
-            .fail(response => {
-               M.toast({html: "Could not check the linking progress."})
             })
    }
 

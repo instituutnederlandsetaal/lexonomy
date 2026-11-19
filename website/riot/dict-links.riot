@@ -21,7 +21,8 @@
                      onclick={openDictInfo.bind(this, dict)}>
                   info
                </i>
-               <a href="#/{dict.dictId}"
+               <a if={!dict.isExternal}
+                     href="#/{dict.dictId}"
                      class="btn right">open</a>
             </h2>
          </div>
@@ -46,16 +47,13 @@
                         <i class="material-symbols-outlined">arrow_forward</i>
                      </td>
                      <td>
-			<template if={link.target_dict != 'BABELNET'}>
-        	                <a href="#/{link.target_dict}/edit/entry/{link.target_entry}/view?link={link.target_id}">
-	                           {link.target_hw || (link.target_el + ' ' + link.target_id)}
-                        	</a>
-			</template>
-         <template if={link.target_dict == 'BABELNET'}>
-                           <a href="https://babelnet.org/synset?id={link.target_id}&lang=EN" target="_blank">
-                              {link.target_hw || (link.target_el + ' ' + link.target_id)}
-                           </a>
-			</template>
+                        <a if={!dict.isExternal}
+                              href="#/{link.target_dict}/edit/entry/{link.target_entry}/view?link={link.target_id}">
+                           {link.target_hw || (link.target_el + ' ' + link.target_id)}
+                        </a>
+                        <span if={dict.isExternal}>
+                           {link.target_hw || (link.target_el + ' ' + link.target_id)}
+                        </span>
                      </td>
                      <td class="grey-text">
                         {link.target_hw ? (link.target_el + ' ' + link.target_id) : ''}
@@ -143,6 +141,8 @@
                if(!this.state.dictionaries[dictId]){
                   this.state.dictionaries[dictId] = {
                      dictId: dictId,
+                     title: dictId,
+                     isExternal: dictId === "BABELNET",
                      from: [],
                      to: []
                   }
@@ -178,6 +178,7 @@
                      this.processLinks(response.links, "to")
                      this.processLinks(response.links, "from")
                      for(let dictId in this.state.dictionaries){
+                        if(this.state.dictionaries[dictId].isExternal) continue
                         if(dictId != this.dictData.dictId){
                            this.state.dictionaries[dictId].isLoading = true
                            this.store.loadDictionary(dictId)

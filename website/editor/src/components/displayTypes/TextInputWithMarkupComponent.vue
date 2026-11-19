@@ -97,8 +97,6 @@ export default {
     }
   },
   created() {
-    let xampl = this.state.entry.dictConfigs.xampl
-
     this.markupElements = [{type: "text", disabled: false}]
     if (Array.isArray(this.children)) {
       this.children.forEach(child => {
@@ -106,10 +104,7 @@ export default {
           this.markupElements.push({type: this.getElementNameInConfig(child.name), disabled: false})
         }
       })
-    } else {
-      this.markupElements = [{type: xampl.markup, disabled: false}]
     }
-
   },
   mounted() {
     this.computeValues()

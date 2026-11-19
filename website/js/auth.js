@@ -11,12 +11,9 @@ class AuthClass {
    resetUser(){
       Object.assign(this.data, {
          username: null,
-         apiKey: null,
          consent: null,
          email: null,
-         sessionkey: null,
-         ske_apiKey: null,
-         ske_username: null
+         sessionkey: null
       })
    }
 

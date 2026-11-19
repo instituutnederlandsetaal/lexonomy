@@ -21,11 +21,6 @@
          </small>
       </div>
    <a href="#register">Get an account</a>
-   <span if={ dictData.siteconfig && dictData.siteconfig.sketchengineLoginPage }>
-   <br/>or log in with
-   <a href={ dictData.siteconfig.sketchengineLoginPage + encodeURIComponent(window.location.href)}>
-            Sketch Engine</a>
-      </span>
       <button class="btn btn-primary waves-effect waves-light"
             name="login"
             id="loginButton"
@@ -55,11 +50,6 @@
    }
    a {
       color: #0000ee;
-      }
-      .skelogin {
-         width: 80px;
-         height: 30px;
-         vertical-align: middle;
       }
       small{
          position: relative;

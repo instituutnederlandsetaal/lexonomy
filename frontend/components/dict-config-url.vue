@@ -1,17 +1,17 @@
 <template>
-<dict-config-url>
-   <LoadingOverlay v-if="state.isSaving"/>
+<div class="dict-config-url">
+   <LoadingOverlay v-if="saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-url', 'Change URL']]"/>
    <h1>Change URL</h1>
-   <DictConfigButtons :save-data="saveData"
+   <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || Boolean(movedUrl)"
          label="Change"></DictConfigButtons>
    <div class="row">
-      <label for="url">Current URL</label>
+      <span>Current URL</span>
       <div style="margin: 0 0 30px;">
-         <span>{{ baseUrl }}{{ activeDictionary.dictId }}</span>
+         <span>{{ baseUrl }}{{ dictId }}</span>
       </div>
    </div>
-   <div class="row">
+   <div v-if="!movedUrl" class="row">
       <label for="url">New URL</label>
       <div>
          <div style="display: flex; align-items: baseline;">
@@ -36,7 +36,7 @@
    </div>
    <br>
    <div>
-      <span v-if="moveResult === false" id="error">This URL is already taken.</span>
+      <span v-if="moveResult === false" id="error">This dictionary URL is unavailable.</span>
       <span v-if="moveResult === true" id="success">
       <b>Your dictionary has been moved to a new URL.</b>
       <RouterLink class="btn waves-effect waves-light" :to="{ name: 'dictionary', params: { dictId: movedUrl } }" id="newlink">
@@ -45,51 +45,51 @@
    </RouterLink>
       </span>
    </div>
-</dict-config-url>
+</div>
 </template>
 
-<script>
-import Materialize from '../libs/materialize/materialize.min.js'
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { basePath } from '../js/api.ts'
+import { moveDictionary } from '../js/dictionary-config-api.ts'
+import { loadMyDictionaries } from '../js/my-dictionaries.ts'
 import { siteSettings } from '../js/site-settings.ts'
-import { activeDictionary } from '../js/dictionary-workspace.ts'
+import { useDictionaryScope } from '../js/use-dictionary-setting.ts'
+import Materialize from '../libs/materialize/materialize.min.js'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-import { api, basePath } from '../js/api.ts'
 
-export default {
-   setup: () => ({ activeDictionary }),
-   components: { DictConfigButtons, DictNav, LoadingOverlay },
-   data() {
-      return {
-         state: { isSaving: false },
-         newUrl: '',
-         movedUrl: '',
-         moveResult: null
-      }
-   },
+const props = defineProps<{ dictId: string }>()
+const scope = useDictionaryScope(() => props.dictId)
+const url = ref<HTMLInputElement>()
+const newUrl = ref('')
+const movedUrl = ref('')
+const moveResult = ref<boolean | null>(null)
+const saving = ref(false)
+const baseUrl = computed(() => siteSettings.value?.baseUrl || location.origin + basePath)
+watch(scope, () => {
+   newUrl.value = ''
+   movedUrl.value = ''
+   moveResult.value = null
+   saving.value = false
+})
 
-   computed: {
-      baseUrl() {
-         return siteSettings.value?.baseUrl || location.origin + basePath
-      }
-   },
-
-   methods: {
-      async saveData() {
-         if (this.state.isSaving || !this.$refs.url.reportValidity()) return
-         const url = this.newUrl
-         this.state.isSaving = true
-         try {
-            const { success } = await api.post(`${encodeURIComponent(this.activeDictionary.dictId)}/move.json`, { url })
-            this.moveResult = success
-            if (success) this.movedUrl = url
-         } catch {
-            Materialize.toast({ html: 'Could not change the dictionary URL.' })
-         } finally {
-            this.state.isSaving = false
-         }
-      }
+async function saveData() {
+   if (saving.value || movedUrl.value || !url.value?.reportValidity()) return
+   const current = scope.value
+   const nextUrl = newUrl.value
+   saving.value = true
+   try {
+      const { success } = await moveDictionary(current.dictId, nextUrl)
+      if (success) void loadMyDictionaries()
+      if (!current.active) return
+      moveResult.value = success
+      if (success) movedUrl.value = nextUrl
+   } catch {
+      if (current.active) Materialize.toast({ html: 'Could not change the dictionary URL.' })
+   } finally {
+      if (current.active) saving.value = false
    }
 }
 </script>

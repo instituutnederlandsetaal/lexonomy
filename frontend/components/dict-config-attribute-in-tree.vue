@@ -1,33 +1,23 @@
 <template>
-<dict-config-attribute-in-tree class="container">
+<div class="dict-config-attribute-in-tree container">
     <div class="horizontal"></div>
-
-    <div class="clickable attribute" :class="{ current: currentAttribute === data.id && currentElement === parentElement.id }"
-        @click="selectElementOrAttribute(parentElement.id, data.id)">
-        <span class="tech"><span class="ats">@</span><span class="att">{{ data.id }}</span></span>
-    </div>
-
-</dict-config-attribute-in-tree>
+    <button type="button" class="clickable attribute" :class="{ current: selected }" @click="emit('select')">
+        <span class="tech"><span class="ats">@</span><span class="att">{{ id }}</span></span>
+    </button>
+</div>
 </template>
 
-<script>
-export default {
-   props: {
-      data: Object,
-      currentElement: String,
-      currentAttribute: String,
-      parentElement: Object,
-      selectElementOrAttribute: Function
-   }
-}
+<script setup lang="ts">
+defineProps<{ id: string; selected: boolean }>()
+const emit = defineEmits<{ select: [] }>()
 </script>
 
 <style>
-dict-config-attribute-in-tree {
+.dict-config-attribute-in-tree {
     position: relative;
     display: inline-block;
 }
-dict-config-attribute-in-tree .attribute {
+.dict-config-attribute-in-tree .attribute {
     display: inline-block;
 }
 </style>

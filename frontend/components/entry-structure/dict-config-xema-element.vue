@@ -1,497 +1,294 @@
 <template>
-<dict-config-xema-element>
-    <!-- element name configuration -->
-    <div class="block">
-        <div class="title">Element</div>
+<div class="dict-config-xema-element">
+   <div class="block">
+      <div class="title">Element</div>
+      <form @submit.prevent="rename">
+         <input v-model="elementName" class="textbox tech elName" aria-label="Element name">
+         <button v-if="canDelete" type="button" class="iconOnly iconCross" aria-label="Delete element" @click="emit('remove', elementId)">&nbsp;</button>
+         <template v-if="elementName !== savedName">
+            <button type="submit" class="butRename iconAccept" :disabled="!isValidXmlName(elementName) || conflictsWithSibling">Rename</button>
+            <button type="button" class="butRenameCancel iconCancel" @click="elementName = savedName">Cancel renaming</button>
+            <div v-if="!isValidXmlName(elementName)" class="warn">{{ elementName }} is not a valid XML name.</div>
+            <div v-else-if="conflictsWithSibling" class="warn">A sibling element already has this name.</div>
+         </template>
+      </form>
+   </div>
 
-        <input class="textbox tech elName" :value="state.config.elementName" @input="updateLocalData" data-path="config.elementName">
-        <button v-if="isRoot" type="button" class="iconOnly iconCross" @click="deleteElement" title="Delete element">&nbsp;</button>
+   <div class="block">
+      <div class="title tight">Attributes</div>
+      <table style="table-layout: auto;">
+         <tbody>
+            <tr v-for="[name, attribute] in sortedAttributes" :key="name">
+               <td>
+                  <button type="button" class="attribute-link" @click="emit('select', elementId, name)">
+                     <span class="tech"><span class="ats">@</span><span class="att">{{ name }}</span></span>
+                  </button>
+               </td>
+               <td>
+                  <div style="display: flex; flex-wrap: wrap; align-items: center;">
+                     <label v-for="option in optionalityChoices" :key="option" class="radio">
+                        <input type="radio" :name="`optionality-${name}`" :value="option"
+                           :checked="(attribute.optionality || 'optional') === option"
+                           @change="updateAttribute(name, { ...attribute, optionality: option })">{{ option }}
+                     </label>
+                     <button type="button" class="iconOnly iconCross" :aria-label="`Delete attribute ${name}`" @click="removeAttribute(name)">&nbsp;</button>
+                  </div>
+               </td>
+            </tr>
+         </tbody>
+      </table>
+      <button v-if="!addingAttribute" type="button" class="butAtNewOpener iconAdd" @click="openAttribute">Add...</button>
+      <form v-else @submit.prevent="addAttribute">
+         <input ref="attributeInput" v-model="newAttributeName" class="textbox tech atName txtAtNew" aria-label="New attribute name">
+         <button type="submit" class="butAtNew iconAccept" :disabled="!canAddAttribute">Add</button>
+         <button type="button" class="butAtNewCancel iconCancel" @click="addingAttribute = false">Cancel</button>
+         <div v-if="newAttributeName && !isValidXmlName(newAttributeName)" class="warn">Not a valid XML name.</div>
+         <div v-else-if="Object.hasOwn(attributes, newAttributeName)" class="warn">This attribute already exists.</div>
+      </form>
+   </div>
 
-        <template v-if="state.config.elementName !== ($props.config.elementName ? $props.config.elementName : $props.elementId)">
-            <button v-if="isValidXmlName(state.config.elementName)"
-                type="button"
-                class="butRename iconAccept"
-                @click="applyLocalData"
-            >
-                Rename
-            </button>
-            <button
-                type="button"
-                class="butRenameCancel iconCancel"
-                @click="resetLocalData"
-                data-path="config.elementName"
-            >
-                Cancel renaming
-            </button>
-            <div v-if="!isValidXmlName(state.config.elementName)" class="warn">{{ state.config.elementName }} is not a valid element name</div>
-        </template>
-    </div>
+   <div class="block">
+      <div class="title">Content</div>
+      <div v-for="option in fillingChoices" :key="option.value">
+         <label class="radio">
+            <input type="radio" name="filling" :value="option.value" :checked="filling === option.value"
+               @change="apply({ filling: option.value })">{{ option.label }}
+         </label>
+      </div>
+   </div>
 
-    <!-- element attribute list & attribute selector -->
-    <div class="block">
-        <div class="title tight">Attributes</div>
+   <XemaValues v-if="filling === 'lst'" :values="config.values" @update="values => apply({ values })"/>
 
-        <table style="table-layout: auto;">
-            <tbody>
-                <tr v-for="att in Object.entries(state.config.attributes).sort((a, b) => a[0].localeCompare(b[0]))" :key="att[0]">
-                    <td @click="selectAttribute" :data-name="att[0]"><span class="tech"><span class="ats">@</span><span class="att">{{ att[0] }}</span></span></td>
-                    <td>
-                        <div style="display: flex; flex-wrap: wrap; align-items: center;">
-                            <label class="radio"><input type="radio" :name="`optionality[${att[0]}]`" value="optional"   :checked="att[1].optionality === 'optional'" @change="updateLocalData" data-apply :data-path="`config.attributes.${att[0]}.optionality`">optional</label>
-                            <label class="radio"><input type="radio" :name="`optionality[${att[0]}]`" value="obligatory" :checked="att[1].optionality === 'obligatory'" @change="updateLocalData" data-apply :data-path="`config.attributes.${att[0]}.optionality`">obligatory</label>
-                            <button class="iconOnly iconCross" @click="deleteLocalData" :data-path="`config.attributes.${att[0]}`" data-apply>&nbsp;</button>
-                        </div>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
+   <div v-if="filling === 'inl' || filling === 'chd'" class="block">
+      <div class="title tight">Child elements</div>
+      <table v-if="children.length" style="table-layout: auto;">
+         <tbody>
+            <tr v-for="(child, index) in children" :key="`${child.name}-${index}`">
+               <td>
+                  <button type="button" class="attribute-link" @click="emit('select', child.name)">
+                     <span class="tech">
+                        <span class="brak">&lt;</span><span class="elm">{{ tagName(child.name) }}</span><span class="brak">&gt;</span>
+                     </span>
+                  </button>
+               </td>
+               <td style="white-space: nowrap;">
+                  <label>min <input class="textbox min" placeholder="0" type="number" min="0" :value="child.min"
+                     @change="setLimit(index, 'min', $event)"></label>
+                  <label>max <input class="textbox max" placeholder="∞" type="number" min="0" :value="displayMaximum(child.max)"
+                     @change="setLimit(index, 'max', $event)"></label>
+               </td>
+               <td style="white-space: nowrap;">
+                  <button class="iconOnly iconArrowUp" type="button" aria-label="Move child up" :disabled="index === 0" @click="moveChild(index, -1)">&nbsp;</button>
+                  <button class="iconOnly iconArrowDown" type="button" aria-label="Move child down" :disabled="index === children.length - 1" @click="moveChild(index, 1)">&nbsp;</button>
+                  <button class="iconOnly iconCross" type="button" aria-label="Remove child" @click="deleteChild(index)">&nbsp;</button>
+               </td>
+               <td>
+                  <button v-if="hasOtherParent(child.name)" type="button" style="padding: 5px; margin-left: 15px;"
+                     @click="makeUnique(index)">Make unique</button>
+                  <div v-if="alternativeOptions(child.name).length" style="display: inline-block; margin-left: 15px;">
+                     <FormSelect v-model="replacement[child.name]" :options="alternativeOptions(child.name)"
+                        placeholder="Choose another definition" aria-label="Alternative element definition"/>
+                     <button type="button" :disabled="!replacement[child.name]" style="padding: 5px;"
+                        @click="replaceChild(index)">Use instead</button>
+                  </div>
+               </td>
+            </tr>
+         </tbody>
+      </table>
 
-        <button
-            v-if="!state.isAddingAttribute"
-            class="butAtNewOpener iconAdd"
-            @click="beginNewAttribute"
-        >
-            Add...
-        </button>
-
-        <template v-if="state.isAddingAttribute">
-            <form @submit="saveNewAttribute" @reset="cancelNewAttribute">
-                <input class="textbox tech atName txtAtNew" @input="updateLocalData" data-path="newAttributeName" autofocus :value="state.newAttributeName">
-                <!-- note: always output this button, only hide in css. If we remove this button pressing enter in the input above will print a console warning because there will be no submit button in the form. -->
-                <button :style="!(state.newAttributeName && isValidXmlName(state.newAttributeName)) ? 'display: none;' : ''" type="submit" class="butAtNew iconAccept">Add</button>
-                <button class="butAtNewCancel iconCancel" type="reset">Cancel</button>
-            </form>
-
-            <div class="warn errInvalidAtName" v-if="!isValidXmlName(state.newAttributeName)">Cannot add, not a valid XML name.</div>
-            <div class="warn errAtNameExists" v-if="state.config.attributes[state.newAttributeName]">Cannot add, such attribute already exists.</div>
-        </template>
-    </div>
-
-    <!-- element content type selection -->
-    <div class="block">
-        <div class="title">Content</div>
-        <label class="radio"><input type="radio" name="filling" value="chd" @change="updateLocalData" data-apply data-path="config.filling" :checked="state.config.filling === 'chd'">Child elements</label>
-        <br>
-        <label class="radio"><input type="radio" name="filling" value="txt" @change="updateLocalData" data-apply data-path="config.filling" :checked="state.config.filling === 'txt'">Text</label>
-        <br>
-        <label class="radio"><input type="radio" name="filling" value="inl" @change="updateLocalData" data-apply data-path="config.filling" :checked="state.config.filling === 'inl'">Text with markup</label>
-        <br>
-        <label class="radio"><input type="radio" name="filling" value="lst" @change="updateLocalData" data-apply data-path="config.filling" :checked="state.config.filling === 'lst'">Value from list</label>
-        <br>
-        <label class="radio"><input type="radio" name="filling" value="emp" @change="updateLocalData" data-apply data-path="config.filling" :checked="state.config.filling === 'emp'">Empty</label>
-        <br>
-        <label class="radio"><input type="radio" name="filling" value="med" @change="updateLocalData" data-apply data-path="config.filling" :checked="state.config.filling === 'med'">Media</label>
-    </div>
-
-    <div class="block" v-if="state.config.filling === 'lst'">
-        <div class="title">Values</div>
-        <table>
-            <tbody>
-                <tr v-for="(value, index) in state.config.values" :key="index">
-                    <td class="cell1">
-                        <form @submit.prevent="applyLocalData" style="white-space: nowrap;">
-                            <input class="textbox val" placeholder="value" :value="value.value" @input="updateLocalData" :data-path="('config.values[') + (index) + ('].value')">
-                            <input class="textbox cap" placeholder="caption" :value="value.caption" @input="updateLocalData" :data-path="('config.values[') + (index) + ('].caption')">
-                            <template v-if="value.value !== $props.config.values?.[index]?.value || value.caption !== $props.config.values?.[index]?.caption">
-                                <button class="change iconAccept" type="submit">Change</button>
-                                <button class="cancel iconCancel" @click="resetLocalData" :data-path="('config.values[') + (index) + (']')" type="button">Cancel</button>
-                            </template>
-                        </form>
-                    </td>
-                    <td class="cell9">
-                        <button class="iconOnly iconCross" @click="deleteLocalData" data-apply :data-path="('config.values[') + (index) + (']')">&nbsp;</button>
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-
-        <template v-if="!state.isAddingValue">
-            <button class="butNewValue iconAdd" @click="beginNewValue">Add...</button>
-        </template>
-        <form v-if="state.isAddingValue" @submit="saveNewValue" style="white-space: nowrap;">
-            <input class="textbox new val" data-path="newValue" placeholder="value" :value="state.newValue" @input="updateLocalData" autofocus>
-            <input class="textbox new cap" data-path="newCaption" placeholder="caption" :value="state.newCaption" @input="updateLocalData">
-
-            <button v-if="state.newValue" class="butNewValueOK iconAccept">Add</button>
-            <button class="butNewValueCancel iconCancel" @click="cancelNewValue" type="button">Cancel</button>
-            <div v-if="state.newValueError" class="warn">{{ state.newValueError }}</div>
-        </form>
-    </div>
-
-    <!-- child element selection/min-max/creation -->
-    <div class="block" v-if="state.config.filling === 'inl' || state.config.filling === 'chd'">
-        <div class="title tight">Child elements</div>
-        <table v-if="computedChildren.length" style="table-layout: auto;">
-            <tbody>
-                <tr v-for="(child, index) in computedChildren" :key="index">
-                    <td @click="selectElement" :data-name="child.id">
-                        <span class="tech">
-                            <span class="brak">&lt;</span>
-                            <span class="elm">{{ child.elementName }}</span>
-                            <span class="brak">&gt;</span>
-                        </span>
-                    </td>
-                    <td style="white-space: nowrap;" >
-                        <label>min <input class="textbox min" placeholder="0" type="number" size="2" style="min-width: 3em" :value="child.min" @change="updateLocalData" data-apply :data-path="`config.children[${index}].min`"></label>
-                        <label>max <input class="textbox max" placeholder="∞" type="number" size="2" style="min-width: 3em" :value="child.max" @change="updateLocalData" data-apply :data-path="`config.children[${index}].max`"></label>
-                    </td>
-                    <td style="white-space: nowrap;" >
-                        <button class="iconOnly iconArrowUp" type="button" @click="moveChildUp" :data-index="index">&nbsp;</button>
-                        <button class="iconOnly iconArrowDown" type="button" @click="moveChildDown" :data-index="index">&nbsp;</button>
-                        <button class="iconOnly iconCross" type="button" @click="deleteChild" :data-index="index">&nbsp;</button>
-                    </td>
-
-                    <td>
-                        <!-- when child is also used elsewhere: make unique (need parent of child) -->
-                        <button v-if="child.isUsedElsewhere" @click="makeUnique" :data-name="child.id" style="padding: 5px; margin-left: 15px;">make&nbsp;unique</button>
-
-                        <!-- when child has similarly named elements elsewhere: allow replacing with those similar elements (need parent of child) -->
-                        <div v-if="child.hasNameSiblings" style="display: inline-block; margin-left: 15px;">
-                            Element {{ child.elementName }} has different configurations:
-                            <select :data-name="child.id">
-                                <option v-for="sibling in child.nameSiblings" :key="sibling.id" :value="sibling.id">{{ sibling.parentElementName }}/{{ sibling.elementName }}</option>
-                            </select>
-                            <button @click="replaceWithNameSibling" :data-name="child.id" style="padding: 5px;">use&nbsp;instead</button>
-                        </div>
-
-                    </td>
-                </tr>
-            </tbody>
-        </table>
-
-        <button v-if="!state.isAddingElement" class="butElNewOpener iconAdd" @click="beginNewElement">Add...</button>
-        <form v-if="state.isAddingElement" @submit="saveNewElement">
-            <input class="textbox tech elName txtElNew" :value="state.newElementName" @input="updateLocalData" data-path="newElementName" autofocus>
-            <button :style="!(state.newElementName && isValidXmlName(state.newElementName)) ? 'display: none!important;' : ''" class="butElNew iconAccept" type="submit">Add</button>
-            <button class="butElNewCancel iconCancel" type="button" @click="cancelNewElement" >Cancel</button>
-            <div v-if="state.newElementName && !isValidXmlName(state.newElementName)" class="warn errInvalidElName">Cannot add, not a valid XML name.</div>
-        </form>
-    </div>
-
-</dict-config-xema-element>
+      <button v-if="!addingElement" type="button" class="butElNewOpener iconAdd" @click="openElement">Add...</button>
+      <form v-else @submit.prevent="addChild">
+         <input ref="elementInput" v-model="newChildName" class="textbox tech elName txtElNew" aria-label="New child element name">
+         <button type="submit" class="butElNew iconAccept" :disabled="!canAddChild">Add</button>
+         <button type="button" class="butElNewCancel iconCancel" @click="addingElement = false">Cancel</button>
+         <div v-if="newChildName && !isValidXmlName(newChildName)" class="warn">Not a valid XML name.</div>
+         <div v-else-if="childNameInUse" class="warn">This parent already has a child with that name.</div>
+      </form>
+   </div>
+</div>
 </template>
 
-<script>
-import { isValidXmlName } from '../../js/xml.js'
-export default {
-   props: ["config","elementId","xema","applyConfig","createElement","removeElement","selectElementOrAttribute"],
+<script setup lang="ts">
+import { computed, nextTick, ref } from 'vue'
+import { isValidXmlName } from '../../js/xml.ts'
+import { maximumChildCount, xmlElementName, type Xema, type XemaAttribute, type XemaChild, type XemaElement, type XemaFilling } from '../../js/xema.ts'
+import FormSelect from '../FormSelect.vue'
+import XemaValues from './xema-values.vue'
 
-   data() {
-      const config = JSON.parse(JSON.stringify(this.config || {}))
-      return {
-         state: {
-            config: {
-               children: [],
-               attributes: {},
-               filling: 'chd',
-               values: [],
-               ...config,
-               elementName: config.elementName || this.elementId
-            },
-            isAddingAttribute: false,
-            newAttributeName: '',
-            isAddingElement: false,
-            newElementName: '',
-            isAddingValue: false,
-            newValue: '',
-            newCaption: '',
-            newValueError: ''
-         }
-      }
-   },
+const props = defineProps<{ config: XemaElement; elementId: string; xema: Xema }>()
+const emit = defineEmits<{
+   update: [id: string, config: XemaElement]
+   remove: [id: string]
+   select: [element: string, attribute?: string]
+}>()
 
-   computed: {
-      isRoot() {
-         return !Object.values(this.xema.elements).some(element => element.children?.some(child => child.name === this.elementId))
-      },
-      computedChildren() {
-          const xemaEntries = Object.entries(this.$props.xema.elements).map(([id, config]) => ({
-              ...config,
-              id,
-              elementName: config.elementName || id
-          }));
+const fillingChoices: { value: XemaFilling; label: string }[] = [
+   { value: 'chd', label: 'Child elements' },
+   { value: 'txt', label: 'Text' },
+   { value: 'inl', label: 'Text with markup' },
+   { value: 'lst', label: 'Value from list' },
+   { value: 'emp', label: 'Empty' },
+   { value: 'med', label: 'Media' }
+]
+const optionalityChoices = ['optional', 'obligatory'] as const
+const tagName = (id: string) => xmlElementName(props.xema, id)
+const savedName = computed(() => tagName(props.elementId))
+const elementName = ref(savedName.value)
+const elements = computed(() => Object.entries(props.xema.elements))
+const attributes = computed(() => props.config.attributes ?? {})
+const sortedAttributes = computed(() => Object.entries(attributes.value).sort(([left], [right]) => left.localeCompare(right)))
+const children = computed(() => props.config.children ?? [])
+const filling = computed(() => props.config.filling ?? 'chd')
+const canDelete = computed(() => elements.value.length > 1 &&
+   !elements.value.some(([, element]) => element.children?.some(child => child.name === props.elementId)))
+const conflictsWithSibling = computed(() => elements.value.some(([, parent]) =>
+   parent.children?.some(child => child.name === props.elementId) &&
+   parent.children.some(child => child.name !== props.elementId && tagName(child.name) === elementName.value)))
 
-          // Do some preprocessing on this element's children
-          // So we can easily see which children are also used elsewhere
-          // and which children have similarly named children elsewhere
-          return (this.state.config.children || []).map(({name, min, max}) => {
-              const id = name;
-              const elementName = this.xema.elements[name]?.elementName || id;
-              // check if other elements (than this one) may contain this precise child
-              const isUsedElsewhere = xemaEntries.some(e => e.children && e.children.some(c => c.name === id) && e.id !== this.$props.elementId);
-              // Find other elements with the same name as this child, that have a different ID
-              // So in essence: different configs for the same element.
-              const nameSiblings = xemaEntries
-                  .filter(e => e.elementName === elementName && e.id !== id) // all with the same elementName but different ID
-                  .map(nameSibling => {
-                      const firstParent = xemaEntries.find(e => e.children && e.children.some(c => c.name === nameSibling.id));
-                      return {
-                          ...nameSibling,
-                          parentElementName: firstParent ? firstParent.elementName : '[no parent]'
-                      }
-                  });
-              const hasNameSiblings = nameSiblings.length > 0;
-              return {
-                  id,
-                  min,
-                  max,
-                  elementName,
-                  isUsedElsewhere,
-                  hasNameSiblings,
-                  nameSiblings
-              }
-          });
-      }
-   },
+const addingAttribute = ref(false)
+const newAttributeName = ref('')
+const attributeInput = ref<HTMLInputElement>()
+const canAddAttribute = computed(() => isValidXmlName(newAttributeName.value) && !Object.hasOwn(attributes.value, newAttributeName.value))
 
-   methods: {
-      updateLocalData(event) {
-          // data-path is a string representing a javascript property accessor. such as 'someObject.someProperty[someIndex]'
-          const path = event.currentTarget.getAttribute('data-path');
+const addingElement = ref(false)
+const newChildName = ref('')
+const elementInput = ref<HTMLInputElement>()
+const childNameInUse = computed(() => children.value.some(child => tagName(child.name) === tagName(newChildName.value)))
+const canAddChild = computed(() => isValidXmlName(newChildName.value) && !childNameInUse.value)
+const replacement = ref<Record<string, string>>(Object.create(null))
 
-          // apply new value in local state
-          this._setOrGetPath(this.state, path, event.target.value);
-          if (event.currentTarget.hasAttribute('data-apply') || event.keyCode === 13) this.applyLocalData();
+function apply(fields: Partial<XemaElement>) {
+   emit('update', props.elementId, { ...props.config, ...fields })
+}
 
-      },
-
-      deleteLocalData(event) {
-          const path = event.currentTarget.getAttribute('data-path');
-          this._deletePath(this.state, path);
-          if (event.currentTarget.hasAttribute('data-apply')) this.applyLocalData();
-
-      },
-
-      resetLocalData(event) {
-          const path = event.currentTarget.getAttribute('data-path');
-          const previousValue = path === 'config.elementName'
-              ? this.config.elementName || this.elementId
-              : this._setOrGetPath(this.$props, path);
-          this._setOrGetPath(this.state, path, previousValue);
-
-      },
-
-      applyLocalData(event) {
-          // sanitize
-          const newConfig = JSON.parse(JSON.stringify(this.state.config));
-          if (!this.isValidXmlName(newConfig.elementName)) {
-              newConfig.elementName = this.$props.config.elementName || this.$props.elementId; // not valid - reset to whatever it was prior to saving
-          }
-
-          this.applyConfig(this.$props.elementId, newConfig);
-      },
-
-      beginNewAttribute(event) {
-          this.state.isAddingAttribute = true;
-
-      },
-
-      cancelNewAttribute(event) {
-          event.preventDefault(); // form reset event.
-          this.state.isAddingAttribute = false;
-          this.state.newAttributeName = '';
-
-      },
-
-      saveNewAttribute(event) {
-          // sanity check.
-          if (!this.state.config.attributes[this.state.newAttributeName] && this.state.newAttributeName && this.isValidXmlName(this.state.newAttributeName)) {
-              this.state.config.attributes[this.state.newAttributeName] = {
-                  optionality: 'optional',
-                  filling: 'txt',
-                  values: []
-              }
-              this.state.newAttributeName = '';
-              this.applyLocalData();
-
-          }
-          event.preventDefault(); // usually form submit event.
-      },
-
-      beginNewElement(event) {
-          this.state.isAddingElement = true;
-
-      },
-
-      cancelNewElement(event) {
-          this.state.isAddingElement = false;
-          event.preventDefault();
-
-      },
-
-      saveNewElement(event) {
-          event.preventDefault();
-          if (!this.isValidXmlName(this.state.newElementName)) {
-              return;
-          }
-          const idOfNewChild = this.state.newElementName;
-          if (!this.$props.xema.elements[idOfNewChild]) { // doesn't exist (yet) - create!
-              this.$props.createElement(this.state.newElementName, {
-                  elementName: this.state.newElementName,
-                  filling: 'emp',
-                  children: [],
-                  values: [],
-                  attributes: {}
-              });
-          }
-
-          this.state.newElementName = '';
-          this.state.config.children.push({name: idOfNewChild})
-          this.applyLocalData();
-      },
-
-      makeUnique(event) {
-          const currentChildId = event.currentTarget.getAttribute('data-name');
-          const currentChildConfig = JSON.parse(JSON.stringify(this.$props.xema.elements[currentChildId]));
-          currentChildConfig.elementName = currentChildConfig.elementName || currentChildId; // make sure we set the element name, since the ID will change and so will no longer work as fallback.
-
-          // create a unique id for the clone by appending numbers
-          let n = 0;
-          let newChildId = currentChildId + n;
-          while (this.$props.xema.elements[newChildId]) {
-              newChildId = currentChildId + (++n);
-          }
-
-          // now clone the child under the new id
-          this.$props.createElement(newChildId, currentChildConfig);
-          // replace the current child with the new (unique) child.
-          this.state.config.children.forEach(c => {
-              if (c.name == currentChildId) c.name = newChildId;
-          })
-          // and save!
-          this.applyLocalData(); // propagate to parent
-
-      },
-
-      replaceWithNameSibling(event) {
-          const childIdToReplace = event.currentTarget.getAttribute('data-name');
-          const childIdToReplaceWith = this.$el.querySelector(`select[data-name="${childIdToReplace}"]`).value; // this.$ is scope selector
-          if (!childIdToReplaceWith) return; // user should make a selection first.
-
-          const childHasOtherParents = Object.entries(this.$props.xema.elements).some(([id, element]) => id !== this.$props.elementId && element.children?.some(c => c.name === childIdToReplace));
-
-          // now replace
-          // first replace our own child with the chosen one
-          this.state.config.children.forEach(c => {
-              if (c.name === childIdToReplace) c.name = childIdToReplaceWith;
-          });
-
-          this.applyLocalData();
-          if (!childHasOtherParents) this.removeElement(childIdToReplace);
-
-      },
-
-      deleteElement() {
-          this.removeElement(this.$props.elementId);
-      },
-
-      deleteChild(event) {
-          const index = event.currentTarget.getAttribute('data-index');
-          const child = this.computedChildren[index];
-          this.state.config.children.splice(index, 1);
-          this.applyLocalData();
-          if (!child.isUsedElsewhere) {
-              this.removeElement(child.id);
-          }
-      },
-
-      swapItems(collection, from, to) {
-          const tmp = collection[to];
-          collection[to] = collection[from]
-          collection[from] = tmp
-      },
-
-      moveChildDown(event) {
-          const from = Number(event.currentTarget.getAttribute('data-index'));
-          const to = from + 1;
-          this.swapItems(this.state.config.children, from, to);
-          this.applyLocalData();
-
-      },
-
-      moveChildUp(event) {
-          const from = Number(event.currentTarget.getAttribute('data-index'));
-          const to = from - 1;
-          this.swapItems(this.state.config.children, from, to);
-          this.applyLocalData();
-
-      },
-
-      beginNewValue(event) {
-          this.state.isAddingValue = true;
-
-      },
-
-      cancelNewValue(event) {
-          this.state.isAddingValue = false;
-          this.state.newValue = '';
-          this.state.newCaption = '';
-          this.state.newValueError = '';
-
-      },
-
-      saveNewValue(event) {
-          if (event) event.preventDefault(); // form submit
-
-          const value = this.state.newValue;
-          const caption = this.state.newCaption;
-          if (this.state.config.values?.find(v => v.value === value)) {
-              this.state.newValueError = `Value ${value} already exists`;
-              return;
-          }
-
-          this.state.config.values ??= []
-          this.state.config.values.push({
-              value: this.state.newValue,
-              caption: this.state.newCaption,
-          })
-          this.state.newValueError = '';
-          // Keep open, nice and simple.
-          // this.state.isAddingValue = false;
-          this.state.newValue = '';
-          this.state.newCaption = '';
-          this.applyLocalData();
-      },
-
-      _setOrGetPath() {
-          const [object, path] = arguments;
-          // see if we actually got a new value to set, to differentiate between _setOrGet(state, path) and _setOrGet(state, path, undefined).
-          let newValue = undefined;
-          let newValueProvided = false;
-          if (arguments.length > 2) {
-              newValue = arguments[2];
-              newValueProvided = true;
-          }
-
-          const pathParts = path.split(/[\.\[\]\'\"]/).filter(p => p);
-          const lastIndex = newValueProvided ? pathParts.pop() : undefined;
-          const v = pathParts.reduce((o, p) => o ? o[p] : undefined, object);
-          if (!newValueProvided) return v;
-          v[lastIndex] = newValue === undefined ? undefined : JSON.parse(JSON.stringify(newValue));
-      },
-
-      _deletePath(object, path) {
-          const pathParts = path.split(/[\.\[\]\'\"]/).filter(p => p);
-          const lastIndex = pathParts.pop();
-          const v = pathParts.reduce((o, p) => o ? o[p] : undefined, object);
-          if (Array.isArray(v)) v.splice(lastIndex, 1)
-          else delete v[lastIndex]
-      },
-
-      selectAttribute(event) {
-          // focus attribute
-          this.$props.selectElementOrAttribute(this.$props.elementId, event.currentTarget.getAttribute('data-name'));
-      },
-
-      selectElement(event) {
-          this.$props.selectElementOrAttribute(event.currentTarget.getAttribute('data-name'), undefined);
-      },
-
-      isValidXmlName
+function rename() {
+   if (isValidXmlName(elementName.value) && !conflictsWithSibling.value && elementName.value !== savedName.value) {
+      apply({ elementName: elementName.value })
    }
+}
+
+async function openAttribute() {
+   addingAttribute.value = true
+   newAttributeName.value = ''
+   await nextTick()
+   attributeInput.value?.focus()
+}
+
+function updateAttribute(name: string, value: XemaAttribute) {
+   apply({ attributes: { ...attributes.value, [name]: value } })
+}
+
+function addAttribute() {
+   if (!canAddAttribute.value) return
+   updateAttribute(newAttributeName.value, { optionality: 'optional', filling: 'txt', values: [] })
+   newAttributeName.value = ''
+}
+
+function removeAttribute(name: string) {
+   const remaining = { ...attributes.value }
+   delete remaining[name]
+   apply({ attributes: remaining })
+}
+
+async function openElement() {
+   addingElement.value = true
+   newChildName.value = ''
+   await nextTick()
+   elementInput.value?.focus()
+}
+
+function addChild() {
+   if (!canAddChild.value) return
+   const name = newChildName.value
+   if (!Object.hasOwn(props.xema.elements, name)) {
+      emit('update', name, { elementName: name, filling: 'emp', attributes: {}, children: [] })
+   }
+   apply({ children: [...children.value, { name, min: 0, max: null }] })
+   newChildName.value = ''
+}
+
+function hasOtherParent(id: string) {
+   return elements.value.some(([key, value]) => key !== props.elementId && value.children?.some(child => child.name === id))
+}
+
+function displayMaximum(value: XemaChild['max']) {
+   const max = maximumChildCount(value)
+   return Number.isFinite(max) ? max : ''
+}
+
+function setLimit(index: number, name: 'min' | 'max', event: Event) {
+   if (!(event.target instanceof HTMLInputElement)) return
+   const child = children.value[index]
+   const number = event.target.valueAsNumber
+   const value = event.target.value === '' ? (name === 'min' ? 0 : null) : number
+   const min = name === 'min' ? Number(value) : Number(child.min || 0)
+   const max = name === 'max' ? value : child.max
+   if ((value !== null && (!Number.isSafeInteger(value) || value < 0)) ||
+       min > maximumChildCount(max)) {
+      event.target.value = String(name === 'max' ? displayMaximum(child.max) : child.min)
+      return
+   }
+   const updated: XemaChild = name === 'min' ? { ...child, min } : { ...child, max: value }
+   apply({ children: children.value.map((item, row) => index === row ? updated : item) })
+}
+
+function moveChild(index: number, direction: 1 | -1) {
+   const list = [...children.value]
+   const next = index + direction
+   if (next < 0 || next >= list.length) return
+   const [child] = list.splice(index, 1)
+   list.splice(next, 0, child)
+   apply({ children: list })
+}
+
+function deleteChild(index: number) {
+   const id = children.value[index].name
+   apply({ children: children.value.filter((_, row) => row !== index) })
+   if (id !== props.elementId && !hasOtherParent(id)) emit('remove', id)
+}
+
+function alternativeOptions(id: string) {
+   return elements.value.filter(([other]) => other !== id && tagName(other) === tagName(id))
+      .map(([value]) => {
+         const parent = elements.value.find(([, element]) => element.children?.some(child => child.name === value))
+         return { value, label: parent ? `${tagName(parent[0])}/${tagName(value)} (${value})` : value }
+      })
+}
+
+function setChild(index: number, name: string) {
+   apply({ children: children.value.map((item, row) => index === row ? { ...item, name } : item) })
+}
+
+function makeUnique(index: number) {
+   const id = children.value[index].name
+   const source = props.xema.elements[id]
+   if (!source) return
+   let number = 0
+   while (Object.hasOwn(props.xema.elements, id + number)) number++
+   const uniqueId = id + number
+   const copy = JSON.parse(JSON.stringify(source)) as XemaElement
+   emit('update', uniqueId, { ...copy, elementName: tagName(id) })
+   setChild(index, uniqueId)
+}
+
+function replaceChild(index: number) {
+   const id = children.value[index].name
+   const selected = replacement.value[id]
+   if (!selected || !alternativeOptions(id).some(option => option.value === selected)) return
+   setChild(index, selected)
+   delete replacement.value[id]
+   if (id !== props.elementId && !hasOtherParent(id)) emit('remove', id)
 }
 </script>
 
 <style>
-
+.dict-config-xema-element .attribute-link {
+   border: 0;
+   background: transparent;
+   padding: 0;
+   cursor: pointer;
+}
+.dict-config-xema-element .textbox.min, .dict-config-xema-element .textbox.max {
+   min-width: 3em;
+}
 </style>

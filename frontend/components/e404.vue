@@ -1,13 +1,6 @@
 <template>
-<e404>
-  <div class="container">
-    Page not found
-  </div>
-</e404>
+   <div class="not-found">
+      <h1>Page not found</h1>
+      <RouterLink :to="{ name: 'home' }">Return to Lexonomy</RouterLink>
+   </div>
 </template>
-
-<script>
-export default {
-
-}
-</script>

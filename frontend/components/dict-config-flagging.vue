@@ -1,22 +1,22 @@
 <template>
-<dict-config-flagging>
-   <LoadingOverlay v-if="state.isLoading || state.isSaving"/>
+<div class="dict-config-flagging">
+   <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-flagging', 'Entry flags']]"/>
    <h1>Entry flags</h1>
-   <DictConfigButtons :save-data="saveData"></DictConfigButtons>
-   <template v-if="!state.isLoading">
-      <div v-if="!state.data.flags.length"
+   <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || !ready"></DictConfigButtons>
+   <template v-if="ready">
+      <div v-if="!draft.flags.length"
             class="center-align grey-text">
          <h1>no entry flags</h1>
          <br>
-         <a class="btn btn-primary waves-effect waves-light"
-               @click="doAddEl">
+         <button type="button" class="btn btn-primary waves-effect waves-light"
+               @click="addFlag" :disabled="!flagOptions.length || saving">
             add flag
             <i class="material-symbols-outlined right">add</i>
-         </a>
+         </button>
       </div>
 
-      <template v-if="state.data.flags.length">
+      <template v-if="draft.flags.length">
          <table>
             <thead>
                <tr>
@@ -28,7 +28,7 @@
                </tr>
             </thead>
             <tbody>
-               <tr v-for="(flag, index) in state.data.flags" :key="index">
+               <tr v-for="(flag, index) in draft.flags" :key="index">
                   <td>
                      <input type="text"
                            v-model="flag.key"
@@ -51,106 +51,78 @@
                            :style="{ color: flagTextColor(flag.color), backgroundColor: flag.color }"/>
                      <input type="color" aria-label="Choose flag color"
                            :value="/^#[a-f0-9]{6}$/i.test(flag.color) ? flag.color : '#000000'"
-                           @input="flag.color = $event.target.value"/>
+                           @input="setColor(index, $event)"/>
                   </td>
                   <td>
-                     <a class="btn btn-flat"
-                           @click="doDeleteEl(index)">
+                     <button type="button" class="btn btn-flat"
+                           aria-label="Delete flag" @click="draft.flags.splice(index, 1)">
                         <i class="material-symbols-outlined">delete</i>
-                     </a>
+                     </button>
                   </td>
                </tr>
             </tbody>
          </table>
          <div>
-            <a class="btn waves-effect waves-light"
-                  @click="doAddEl">
+            <button type="button" class="btn waves-effect waves-light"
+                  @click="addFlag" :disabled="!flagOptions.length || saving">
                add flag
                <i class="material-symbols-outlined right">add</i>
-            </a>
+            </button>
          </div>
          <br>
          <br>
          <div class="input-field"
                style="max-width: 400px;">
-            <select id="flag-element" v-model="state.data.flag_element">
-               <option v-for="name in flagElements" :key="name" :value="name">{{ name }}</option>
-            </select>
-            <label for="flag-element">Flag element</label>
+            <FormSelect id="flag-element" v-model="draft.flag_element" :options="flagOptions" aria-label="Flag element"/>
             <span class="helper-text">Select the element which the flags should be put into.</span>
          </div>
       </template>
    </template>
    <br><br>
-</dict-config-flagging>
+   <p v-if="!loading && !ready">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
+</div>
 </template>
 
-<script>
-import Materialize from '../libs/materialize/materialize.min.js'
-import { flagTextColor } from './entry-flags.js'
-import { activeDictionary, dictionaryWorkspace } from '../js/dictionary-workspace.ts'
+<script setup lang="ts">
+import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-import { materializeSelects } from './form-select.js'
-export default {
-   setup: () => ({ activeDictionary, flagTextColor }),
-   components: { DictConfigButtons, DictNav, LoadingOverlay },
-   mixins: [materializeSelects],
+import { computed, ref } from 'vue'
+import { activeDictionary } from '../js/dictionary-workspace.ts'
+import type { DictionarySettings } from '../js/dictionary-config-api.ts'
+import { flagTextColor } from './entry-flags.js'
+import FormSelect from './FormSelect.vue'
 
-   data() {
-      return {
-         state: {
-            isLoading: true,
-            isSaving: false,
-            data: {flag_element: "", flags: []}
-         }
-      }
-   },
+const props = defineProps<{ dictId: string }>()
+const draft = ref<DictionarySettings['flagging']>({ flag_element: '', flags: [] })
+const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'flagging', content => {
+   draft.value = { flag_element: content.flag_element ?? '', flags: content.flags ?? [] }
+})
+const xema = computed(() => activeDictionary.config?.xema)
+const flagElements = computed(() => Object.keys(xema.value?.elements ?? {}).filter(id => id !== xema.value?.root))
+const flagOptions = computed(() => [...new Set([draft.value.flag_element, ...flagElements.value])]
+   .filter(Boolean).map(value => ({ value, label: xema.value?.elements[value]?.elementName || value })))
 
-   async mounted() {
-      const response = await dictionaryWorkspace.loadDictionaryConfig('flagging')
-      if (response) {
-         this.state.data = response.content
-      }
-      this.state.isLoading = false
-   },
+function setColor(index: number, event: Event) {
+   if (event.target instanceof HTMLInputElement) draft.value.flags[index].color = event.target.value
+}
 
-   computed: {
-      flagElements() {
-         const xema = this.activeDictionary.config?.xema
-         return Object.keys(xema?.elements || {}).filter(name => name !== xema.root)
-      }
-   },
+function addFlag() {
+   draft.value.flag_element ||= flagElements.value[0] ?? ''
+   draft.value.flags.push({ key: '', name: '', label: '', color: '' })
+}
 
-   updated() {
-      Materialize.updateTextFields()
-   },
-
-   methods: {
-      doDeleteEl(idx) {
-         this.state.data.flags.splice(idx, 1)
-      },
-
-      doAddEl() {
-         if (!this.state.data.flag_element) this.state.data.flag_element = this.flagElements[0] || ''
-         this.state.data.flags.push({key: "", name: "", label: "", color: ""})
-      },
-
-      async saveData() {
-         this.state.isSaving = true
-         await dictionaryWorkspace.updateDictionaryConfig("flagging", this.state.data)
-         this.state.isSaving = false
-      }
-   }
+function saveData() {
+   return save(draft.value)
 }
 </script>
 
 <style>
-dict-config-flagging tr{
+.dict-config-flagging tr{
    border-bottom: none;
 }
-dict-config-flagging th, dict-config-flagging td{
+.dict-config-flagging th, .dict-config-flagging td{
    padding: 3px 10px 3px 0;
 }
 </style>

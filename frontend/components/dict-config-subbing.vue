@@ -1,206 +1,148 @@
 <template>
-<dict-config-subbing>
-   <LoadingOverlay v-if="state.isLoading || state.isSaving"/>
+<div class="dict-config-subbing">
+   <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-subbing', 'Subentries']]"/>
    <h1>Subentries</h1>
-   <template v-if="!state.isLoading">
-      <DictConfigButtons :save-data="saveData" :show-save="true"></DictConfigButtons>
+   <template v-if="ready">
+      <DictConfigButtons :dict-id="dictId" :save-data="() => save(draft)" :disabled="saving"/>
 
-      <div v-for="element in activeSubentries" :key="element.name" :data-element="element.name" :class="element.valid ? 'element-info' : 'element-info text-red'" >
+      <div v-for="element in activeSubentries" :key="element.id" class="element-info" :class="{ 'text-red': !element.valid }">
          <div class="header">
-            <h5>{{ element.name }} {{ element.valid ? ''  : '(unknown element)!' }}</h5>
-            <button type="button" class="btn btn-small red lighten-1" :title="('Remove ') + (element.name) + (' from subentries')" style="margin-right: 15px;" @click="doDeleteEl"><i class="material-symbols-outlined">delete</i></button>
+            <h5>{{ element.name }} {{ element.valid ? '' : '(unknown element)' }}</h5>
+            <button type="button" class="btn btn-small red lighten-1" :aria-label="`Remove ${element.name} from subentries`"
+               style="margin-right: 15px;" @click="delete draft[element.id]"><i class="material-symbols-outlined">delete</i></button>
          </div>
 
-         <span class="helper-text">(Optional) - Attributes this element should have to be a subentry: </span>
+         <span class="helper-text">Optional attributes this element must have to become a subentry</span>
 
-         <div v-for="att in element.activeAttributes" :key="att.name" :data-attribute="att.name" class="att">
-            <label :for="`${att.name}-value`" class="name blue-text">@{{ att.name }}</label>
-            <select v-if="att.values" class="value" @change="changeAttribute" :value="att.value" :name="`${att.name}-value`">
-               <option value="" :selected="!att.value">[any value]</option>
-               <option v-for="v in att.values" :key="v.value" :value="v.value" :selected="v.value === att.value">{{ v.value }}</option>
-            </select>
-            <input v-if="!att.values" type="text" class="value" :value="att.value" @change="changeAttribute" placeholder="Value">
-            <button type="button" class="btn btn-small red lighten-1" :title="('Remove ') + (att.name) + (' from required attributes')" @click="deleteAttribute"><i class="material-symbols-outlined">delete</i></button>
+         <div v-for="attribute in element.attributes" :key="attribute.name" class="att">
+            <label :for="`subbing-${element.id}-${attribute.name}`" class="name">@{{ attribute.name }}</label>
+            <FormSelect v-if="attribute.options.length" v-model="draft[element.id].attributes[attribute.name]" class="value"
+               :id="`subbing-${element.id}-${attribute.name}`" :options="attribute.options" :aria-label="attribute.name"/>
+            <input v-else v-model="draft[element.id].attributes[attribute.name]" :id="`subbing-${element.id}-${attribute.name}`"
+               type="text" class="value" placeholder="Value">
+            <button type="button" class="btn btn-small red lighten-1" :aria-label="`Remove required attribute ${attribute.name}`"
+               @click="delete draft[element.id].attributes[attribute.name]"><i class="material-symbols-outlined">delete</i></button>
          </div>
 
-         <div v-if="element.inactiveAttributes.length" class="att-new">
-            <select class="name new-attribute" name="new-attribute">
-               <option v-for="att in element.inactiveAttributes" :key="att.name" :value="att.name">{{ att.name }}</option>
-            </select>
-            <button class="btn btn-small" type="button" @click="addAttribute" title="Add required subentry attribute"><i class="material-symbols-outlined">add</i></button>
+         <div v-if="element.availableAttributes.length" class="att-new">
+            <FormSelect v-model="newAttribute[element.id]" class="name" aria-label="Required subentry attribute"
+               placeholder="Choose an attribute" :options="element.availableAttributes"/>
+            <button class="btn btn-small" type="button" :disabled="!newAttribute[element.id]"
+               @click="addAttribute(element.id)" aria-label="Add required subentry attribute"><i class="material-symbols-outlined">add</i></button>
          </div>
 
-         <!-- Headword element selection for subentry titling -->
-         <div class="att-new" v-if="getSubentryDescendants(element.name).length">
-            <label :for="`headword-${element.name}`" class="name">Headword element</label>
-            <select class="value" :name="`headword-${element.name}`" @change="e => setSubentryHeadword(element.name, e.target.value)">
-               <option value="" :selected="!getSubentryHeadword(element.name)">(not set)</option>
-               <option v-for="desc in getSubentryDescendants(element.name)" :key="desc.id" :value="desc.id" :selected="getSubentryHeadword(element.name) === desc.id">{{ desc.displayName }}</option>
-            </select>
-            <span class="helper-text">Select which descendant element of <b>{{ element.name }}</b> should be used as the headword/title for subentries of this type.</span>
+         <div v-if="element.headwords.length > 1" class="att-new">
+            <label :for="`headword-${element.id}`" class="name">Headword element</label>
+            <FormSelect :id="`headword-${element.id}`" class="value" aria-label="Headword element"
+               v-model="draft[element.id].titling.headword" :options="element.headwords"/>
+            <span class="helper-text">Select which descendant element of <b>{{ element.name }}</b> to use as the headword.</span>
          </div>
       </div>
 
-      <div class="row" v-if="inactiveSubentries.length" style="margin-top: 15px;">
+      <div v-if="availableSubentries.length" class="row" style="margin-top: 15px;">
          <div class="input-field col s6">
-            <select id="new-element">
-               <option v-for="elementName in inactiveSubentries" :key="elementName" :value="elementName">{{ elementName }}</option>
-            </select>
-            <label for="new-element">Subentry element</label>
+            <FormSelect id="new-element" v-model="newElement" :options="availableSubentries"
+               aria-label="Subentry element" placeholder="Choose an element"/>
             <span class="helper-text">Elements listed here function as subentries which can be shared by multiple entries.</span>
          </div>
          <div class="input-field col s1">
-            <button class="btn btn-small" @click="doAddEl" title="Add subentry element"><i class="material-symbols-outlined">add</i></button>
+            <button type="button" class="btn btn-small" :disabled="!newElement" @click="addSubentry" aria-label="Add subentry element">
+               <i class="material-symbols-outlined">add</i>
+            </button>
          </div>
       </div>
-
    </template>
-
-</dict-config-subbing>
+   <p v-else-if="!loading">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
+</div>
 </template>
 
-<script>
-import { activeDictionary, dictionaryWorkspace } from '../js/dictionary-workspace.ts'
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { activeDictionary } from '../js/dictionary-workspace.ts'
+import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
+import FormSelect from './FormSelect.vue'
 import LoadingOverlay from './loading-overlay.vue'
-import { materializeSelects } from './form-select.js'
-// @ts-check
 
-export default {
-   setup: () => ({ activeDictionary }),
-   components: { DictConfigButtons, DictNav, LoadingOverlay },
-   mixins: [materializeSelects],
+type SubentryDraft = { attributes: Record<string, string>; titling: { headword: string } }
+const props = defineProps<{ dictId: string }>()
+const draft = ref<Record<string, SubentryDraft>>({})
+const newElement = ref('')
+const newAttribute = ref<Record<string, string>>(Object.create(null))
+const xemaElements = computed(() => activeDictionary.config?.xema.elements ?? {})
+const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'subbing', content => {
+   newElement.value = ''
+   newAttribute.value = Object.create(null)
+   draft.value = Object.fromEntries(Object.entries(content).map(([id, entry]) => [id, {
+      attributes: entry?.attributes ?? {},
+      titling: { headword: entry?.titling?.headword ?? '' }
+   }]))
+})
 
-   data() {
-      return {
-         state: {
-            isLoading: true,
-            isSaving: false,
-         },
-         configData: {}
-      }
-   },
+const availableSubentries = computed(() => Object.entries(xemaElements.value)
+   .filter(([id]) => !Object.hasOwn(draft.value, id))
+   .map(([value, element]) => ({ value, label: element.elementName || value })))
 
-   async mounted() {
-      const response = await dictionaryWorkspace.loadDictionaryConfig('subbing')
-      this.configData = response?.content || {}
-      this.state.isLoading = false
-   },
-
-   computed: {
-      xema() { return this.activeDictionary?.config?.xema; },
-
-      elements() { return Object.keys(this.xema?.elements || {}); },
-
-      activeSubentries() {
-         if (!this.xema) return [];
-         return Object
-            .entries(this.configData)
-            .map(([elementName, value]) => ({
-               name: elementName,
-               valid: !!this.xema.elements[elementName], // mark invalid subentry configurations (element is not in the entry schema - maybe it changed?)
-               activeAttributes: Object
-                  .entries(value.attributes || {})
-                  .map(([attributeName, attributeValue]) => ({
-                     name: attributeName,
-                     value: attributeValue,
-                     values: this.xema.elements[elementName]?.attributes?.[attributeName]?.values
-                  })),
-               inactiveAttributes: Object
-                  .entries(this.xema.elements[elementName]?.attributes || {})
-                  .filter(([name]) => !(name in (value.attributes || {})))
-                  .map(([attributeName, {values}]) => ({
-                     name: attributeName,
-                     values
-                  }))
-               })
-            )
-      },
-
-      inactiveSubentries() {
-         return this.elements.filter(name => !this.configData[name])
-      }
-   },
-
-   methods: {
-      addAttribute(event) {
-         const context = event.target.closest('[data-element]');
-         const elementName = context.getAttribute('data-element');
-         const attributeName = context.querySelector('.new-attribute').value
-         if (!attributeName) return;
-         this.configData[elementName].attributes = this.configData[elementName].attributes || {}; // init if the config is old format
-         this.configData[elementName].attributes[attributeName] = ""
-
-      },
-
-      deleteAttribute(event) {
-         const elementName = event.target.closest('[data-element]').getAttribute('data-element');
-         const attributeName = event.target.closest('[data-attribute]').getAttribute('data-attribute');
-         delete this.configData[elementName].attributes[attributeName];
-
-      },
-
-      changeAttribute(event) {
-         const elementName = event.target.closest('[data-element]').getAttribute('data-element');
-         const attributeName = event.target.closest('[data-attribute]').getAttribute('data-attribute');
-         const newValue = event.target.value;
-         this.configData[elementName].attributes[attributeName] = newValue;
-
-      },
-
-      doDeleteEl(event) {
-         const elementName = event.target.closest('[data-element]').getAttribute('data-element');
-         delete this.configData[elementName]
-
-      },
-
-      doAddEl() {
-         const elementName = this.$el.querySelector('#new-element').value;
-         if (!elementName) return;
-         this.configData[elementName] = { attributes: {} }
-
-      },
-
-      async saveData() {
-         this.state.isSaving = true
-         await dictionaryWorkspace.updateDictionaryConfig("subbing", this.configData)
-         this.state.isSaving = false
-      },
-
-      getSubentryDescendants(elementName) {
-         // Returns array of {id, displayName} for all descendants (including children, grandchildren, etc) of this subentry element
-         const xema = this.xema;
-         if (!xema?.elements?.[elementName]) return [];
-         const seen = new Set();
-         const descendants = [];
-         const visit = elId => {
-            if (!xema.elements[elId] || seen.has(elId)) return;
-            seen.add(elId);
-            const elConfig = xema.elements[elId];
-            descendants.push({ id: elId, displayName: elConfig.elementName || elId });
-            elConfig.children?.forEach(child => visit(child.name));
-         };
-         xema.elements[elementName].children?.forEach(child => visit(child.name));
-         return descendants;
-      },
-
-      getSubentryHeadword(elementName) {
-         return this.configData[elementName]?.titling?.headword || '';
-      },
-
-      setSubentryHeadword(elementName, value) {
-         if (!this.configData[elementName].titling) this.configData[elementName].titling = {};
-         this.configData[elementName].titling.headword = value;
-
-      }
+const activeSubentries = computed(() => Object.entries(draft.value).map(([id, entry]) => {
+   const schema = xemaElements.value[id]
+   const attributes = schema?.attributes ?? {}
+   return {
+      id,
+      valid: Boolean(schema),
+      name: schema?.elementName || id,
+      attributes: Object.entries(entry.attributes).map(([name, current]) => {
+         const values = attributes[name]?.values ?? []
+         const options = values.length
+            ? [{ value: '', label: '[any value]' }, ...values.filter(option => option.value !== '')
+               .map(({ value }) => ({ value, label: value }))]
+            : []
+         if (options.length && !options.some(option => option.value === current)) {
+            options.push({ value: current, label: current })
+         }
+         return { name, options }
+      }),
+      availableAttributes: Object.keys(attributes).filter(name => !Object.hasOwn(entry.attributes, name))
+         .map(value => ({ value, label: value })),
+      headwords: headwordOptions(id, entry.titling.headword)
    }
+}))
+
+function headwordOptions(id: string, current: string) {
+   const elements = xemaElements.value
+   const seen = new Set([id])
+   const options = [{ value: '', label: '(not set)' }]
+   const visit = (name: string) => {
+      const element = elements[name]
+      if (!element || seen.has(name)) return
+      seen.add(name)
+      options.push({ value: name, label: element.elementName || name })
+      element.children?.forEach(child => visit(child.name))
+   }
+   elements[id]?.children?.forEach(child => visit(child.name))
+   if (current && !options.some(option => option.value === current)) options.push({ value: current, label: current })
+   return options
+}
+
+function addSubentry() {
+   const id = newElement.value
+   if (id && Object.hasOwn(xemaElements.value, id) && !Object.hasOwn(draft.value, id)) {
+      draft.value = { ...draft.value, [id]: { attributes: {}, titling: { headword: '' } } }
+      newElement.value = ''
+   }
+}
+
+function addAttribute(id: string) {
+   const name = newAttribute.value[id]
+   if (!name || Object.hasOwn(draft.value[id].attributes, name)) return
+   draft.value[id].attributes = { ...draft.value[id].attributes, [name]: '' }
+   newAttribute.value[id] = ''
 }
 </script>
 
 <style>
-dict-config-subbing .element-info {
+.dict-config-subbing .element-info {
    display: flex;
    flex-direction: column;
 
@@ -210,7 +152,7 @@ dict-config-subbing .element-info {
    padding: 15px 30px;
 }
 
-dict-config-subbing .element-info > .header {
+.dict-config-subbing .element-info > .header {
    display: flex;
    flex-direction: row;
    flex-wrap: nowrap;
@@ -219,12 +161,12 @@ dict-config-subbing .element-info > .header {
    border-bottom: 1px solid #9e9e9e;
    margin-bottom: 25px;
 }
-dict-config-subbing .element-info > .helper-text {
+.dict-config-subbing .element-info > .helper-text {
    margin-left: 25px;
 }
 
-dict-config-subbing .element-info > .att,
-dict-config-subbing .element-info > .att-new {
+.dict-config-subbing .element-info > .att,
+.dict-config-subbing .element-info > .att-new {
    margin-left: 25px;
    padding-top: 25px;
    display: flex;
@@ -234,31 +176,30 @@ dict-config-subbing .element-info > .att-new {
    width: 66.66%;
 }
 
-dict-config-subbing .att > * {
+.dict-config-subbing .att > * {
    margin-right: 15px!important;
    flex: none;
 }
-dict-config-subbing .att > .name {
+.dict-config-subbing .att > .name {
    min-width: 16.667%
 }
-dict-config-subbing .att > .value,
-dict-config-subbing .att > .select-wrapper {
+.dict-config-subbing .att > .value {
    flex: auto;
 }
 
-dict-config-subbing .att + .att-new {
+.dict-config-subbing .att + .att-new {
    border-top: 1px solid #9e9e9e;
 }
-dict-config-subbing .element-info > .att-new {
+.dict-config-subbing .element-info > .att-new {
    flex-wrap: wrap;
    justify-content: stretch;
 }
-dict-config-subbing .att-new > * {
+.dict-config-subbing .att-new > * {
    margin-right: 15px!important;
    flex: none;
 }
-dict-config-subbing .att-new > .name,
-dict-config-subbing .att-new > .select-wrapper {
+.dict-config-subbing .att-new > .name,
+.dict-config-subbing .att-new > .value {
    flex: auto;
 }
 </style>

@@ -4,6 +4,9 @@ type Side = 'source' | 'target'
 type LinkEndpoints = Record<`${Side}_${'dict' | 'entry' | 'id'}`, string>
    & Partial<Record<`${Side}_doctype`, string>>
 
+export type DictionaryLink = LinkEndpoints & { link_id: number; confidence?: number | string | null }
+   & Record<`${Side}_el`, string> & Partial<Record<`${Side}_${'hw' | 'preview'}`, string>>
+
 export function linkedEntryLocation(link: LinkEndpoints, side: Side): RouteLocationRaw {
    const dictId = link[`${side}_dict`]
    const entryId = link[`${side}_entry`]

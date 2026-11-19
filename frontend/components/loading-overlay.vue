@@ -1,54 +1,44 @@
 <template>
-<loading-overlay>
-   <div class="overlay" :class="{ fullscreen }">
-      <div id="loading-bar-spinner"
-            class="spinner">
-         <div class="spinner-icon"></div>
+   <div class="loading-overlay" :class="{ fullscreen }" role="status" aria-label="Loading">
+      <div class="spinner" aria-hidden="true">
+         <div class="spinner-icon"/>
       </div>
    </div>
-
-   
-</loading-overlay>
 </template>
 
 <script setup lang="ts">
 defineProps<{ fullscreen?: boolean }>()
 </script>
 
-<style>
-loading-overlay .overlay{
+<style scoped>
+.loading-overlay {
    position: absolute;
-   top: 0;
-   right: 0;
-   bottom: 0;
-   left: 0;
-   background-color: rgba(255, 255, 255, 0.7);
+   inset: 0;
+   background-color: rgb(255 255 255 / 70%);
    z-index: 999999999;
 }
-loading-overlay .overlay.fullscreen{
+.fullscreen {
    position: fixed;
 }
-
-loading-overlay #loading-bar-spinner.spinner {
+.spinner {
    left: 50%;
    margin-left: -30px;
    top: 40%;
    position: absolute;
-   z-index: 999999999 !important;
    animation: loading-bar-spinner 400ms linear infinite;
 }
-
-loading-overlay #loading-bar-spinner.spinner .spinner-icon {
+.spinner-icon {
    width: 60px;
    height: 60px;
    border: solid 1px transparent;
-   border-top-color: #000000 !important;
-   border-left-color: #000000 !important;
+   border-top-color: #000;
+   border-left-color: #000;
    border-radius: 50%;
 }
-
 @keyframes loading-bar-spinner {
-  0%   { transform: rotate(0deg);   transform: rotate(0deg); }
-  100% { transform: rotate(360deg); transform: rotate(360deg); }
+   to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+   .spinner { animation: none; }
 }
 </style>

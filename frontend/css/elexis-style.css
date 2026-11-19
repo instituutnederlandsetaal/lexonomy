@@ -34,17 +34,6 @@ h3.header {
 	padding-bottom: 10px;
 	font-size: 130%;
 }
-[is="dict-config"] .columnContainer div {
-	width: 20%;
-}
-[is="dict-config"] .columnContainer div ul li {
-	border-bottom: 1px solid #c7d0dd;
-	padding-top: 10px;
-	background-color: #ffffff;
-}
-[is="dict-config"] .columnContainer div ul li:hover {
-	background-color: #edf1f7;
-}
 .dropdown-trigger a, .dropdown-trigger a:hover {
 	color: #004494 !important;
 }

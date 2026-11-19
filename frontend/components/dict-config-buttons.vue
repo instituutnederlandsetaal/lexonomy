@@ -1,37 +1,36 @@
 <template>
-<dict-config-buttons class="buttons">
-   <RouterLink :to="{ name: 'config', params: { dictId: activeDictionary.dictId } }"
-         class="btn btn-secondary" :class="{ 'btn-flat': showSave }">
+<div class="dict-config-buttons buttons">
+   <RouterLink :to="{ name: 'config', params: { dictId } }"
+         class="btn btn-secondary" :class="{ 'btn-flat': showSave !== false }">
       Back
    </RouterLink>
    <button v-if="showSave !== false"
          class="btn waves-effect waves-light"
          @click="saveData"
-         type="button"
-         id="submit_button">
+         :disabled="disabled"
+         type="button">
       {{ label }}
       <i class="material-symbols-outlined right">edit</i>
    </button>
 
    <slot/>
 
-</dict-config-buttons>
+</div>
 </template>
 
-<script>
-import { activeDictionary } from '../js/dictionary-workspace.ts'
-export default {
-   setup: () => ({ activeDictionary }),
-   props: {
-      showSave: { type: Boolean, default: undefined },
-      saveData: Function,
-      label: { type: String, default: 'Save' }
-   }
-}
+<script setup lang="ts">
+withDefaults(defineProps<{
+   dictId: string
+   showSave?: boolean
+   saveData?: () => void | Promise<unknown>
+   label?: string
+   disabled?: boolean
+}>(), { showSave: true, label: 'Save' })
+
 </script>
 
 <style>
-dict-config-buttons{
+.dict-config-buttons{
    margin-top: 20px;
 }
 </style>

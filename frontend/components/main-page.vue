@@ -1,6 +1,6 @@
 <template>
 <div class="main-page">
-   <div v-if="session">
+   <div v-if="session && !tokenPage">
       <UserConsent v-if="siteSettings?.consent?.terms && !session.consent"/>
       <DictNew v-else-if="mainSubPage === 'new'"/>
       <Userprofile v-else-if="mainSubPage === 'userprofile'"/>
@@ -9,7 +9,7 @@
    <div v-else>
       <div class="row">
          <div class="col s12 m5 offset-m4" style="text-align:center">
-            <img class="login-logo" src="/assets/img/logo_lexonomy_white.png">
+            <img class="login-logo" alt="Lexonomy" src="/assets/img/logo_lexonomy_white.png">
          </div>
       </div>
       <div class="row">
@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { siteSettings } from '../js/site-settings.ts'
 import { session } from '../js/auth.ts'
 import AccountEmail from './account-email.vue'
@@ -50,9 +50,10 @@ import Login from './login.vue'
 import UserConsent from './user-consent.vue'
 import Userprofile from './userprofile.vue'
 
-defineProps<{ mainSubPage: string; token?: string }>()
+const props = defineProps<{ mainSubPage: string; token?: string }>()
 
 const setupComplete = ref(false)
+const tokenPage = computed(() => props.mainSubPage === 'registerPassword' || props.mainSubPage === 'forgotPassword')
 
 function finishSetup() {
    if (siteSettings.value) siteSettings.value = { ...siteSettings.value, setupRequired: false }

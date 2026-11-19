@@ -1,20 +1,20 @@
 <template>
-<dict-config-ident>
-   <LoadingOverlay v-if="state.isLoading || state.isSaving"/>
+<div class="dict-config-ident">
+   <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-ident', 'Description']]"/>
    <h1>Description</h1>
    <div>
-      <form>
-         <DictConfigButtons :save-data="saveData"></DictConfigButtons>
+      <form v-if="ready" @submit.prevent="saveData">
+         <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || !ready"></DictConfigButtons>
          <div class="row">
             <div class="input-field">
-               <input v-model="state.data.title"
+               <input v-model="draft.title"
                      placeholder="My Dictionary"
                      id="ident_title"
                      type="text"
                      class="validate"
                      style="width:300px" />
-               <label for="ident_title">Dictionary name</label>
+               <label class="active" for="ident_title">Dictionary name</label>
                <span class="helper-text">A human-readable title for your dictionary, such as <i>My Esperanto Dictionary</i>.</span>
             </div>
          </div>
@@ -23,8 +23,8 @@
                <textarea id="ident_blurb"
                      class="materialize-textarea"
                      placeholder="Yet another Lexonomy dictionary."
-                     rows="3" v-model="state.data.blurb"></textarea>
-               <label for="ident_blurb">Dictionary description</label>
+                     rows="3" v-model="draft.blurb"></textarea>
+               <label class="active" for="ident_blurb">Dictionary description</label>
                <span class="helper-text">
                   This will appear on your dictionary's home page. You can leave it blank if you prefer.<br/>You can use <a href='https://daringfireball.net/projects/markdown/' target='_blank'>Markdown</a> here.
                </span>
@@ -32,82 +32,52 @@
          </div>
          <div class="row">
             <div class="input-field">
-               <input v-model="state.data.lang"
+               <input v-model="draft.lang"
                      type="text"
                      id="ident_lang"
-                     ref="language"
-                     class="autocomplete"
                      placeholder="Type to search for language, or write your custom info"
-                     style="width:300px">
-               <label for="ident_lang">Main language</label>
+                     style="width:300px" list="dictionary-languages">
+               <datalist id="dictionary-languages"><option v-for="language in languages" :key="language" :value="language"/></datalist>
+               <label class="active" for="ident_lang">Main language</label>
                <span class="helper-text">Language of dictionary entries, used to sort dictionaries on your home page. You can select language from the list, or write down your own.</span>
             </div>
          </div>
          <div class="row">
             <div class="input-field">
-               <input v-model="state.data.handle"
+               <input v-model="draft.handle"
                      placeholder="URL"
                      id="ident_handle"
                      type="text"
                      class="validate"/>
-               <label for="ident_title">Metadata from CLARIN repository</label>
+               <label class="active" for="ident_handle">Metadata from CLARIN repository</label>
                <span class="helper-text">Link to metadata recorded in CLARIN repository, provide URL to 'handle' link, eg. <code>http://hdl.handle.net/11356/1094</code>.</span>
             </div>
          </div>
       </form>
    </div>
-</dict-config-ident>
+   <p v-if="!loading && !ready">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
+</div>
 </template>
 
-<script>
-import Materialize from '../libs/materialize/materialize.min.js'
-import { dictionaryWorkspace } from '../js/dictionary-workspace.ts'
-import { loadMyDictionaries } from '../js/my-dictionaries.ts'
+<script setup lang="ts">
+import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-export default {
-   components: { DictConfigButtons, DictNav, LoadingOverlay },
-   data() {
-      return {
-         state: {
-            isLoading: true,
-            isSaving: false,
-            data: {}
-         }
-      }
-   },
+import { computed, ref } from 'vue'
+import type { DictionarySettings } from '../js/dictionary-config-api.ts'
+import { loadMyDictionaries } from '../js/my-dictionaries.ts'
 
-   async mounted() {
-      const response = await dictionaryWorkspace.loadDictionaryConfig('ident')
-      if (response) {
-         this.state.data = response.content
-      }
-      this.state.isLoading = false
-      await this.$nextTick()
-      if (!this.$refs.language) return
-      Materialize.updateTextFields()
-      Materialize.textareaAutoResize(this.$el.querySelector('#ident_blurb'))
-      if (this.state.data.langs) {
-         const data = Object.fromEntries(this.state.data.langs.map(language => [language.lang, null]))
-         Materialize.Autocomplete.init(this.$refs.language, {
-            data, onAutocomplete: lang => { this.state.data.lang = lang }
-         })
-      }
-   },
+const props = defineProps<{ dictId: string }>()
+const defaults: DictionarySettings['ident'] = { title: '', blurb: '', lang: '', handle: '' }
+const draft = ref({ ...defaults })
+const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'ident', content => {
+   draft.value = { ...defaults, ...content }
+})
+const languages = computed(() => [...new Set(draft.value.langs?.map(language => language.lang) ?? [])])
 
-   beforeUnmount() {
-      Materialize.Autocomplete.getInstance(this.$refs.language)?.destroy()
-   },
-
-   methods: {
-      async saveData() {
-         this.state.isSaving = true
-         const { title = '', blurb = '', lang = '', handle = '' } = this.state.data
-         const response = await dictionaryWorkspace.updateDictionaryConfig("ident", { title, blurb, lang, handle })
-         if (response?.success) loadMyDictionaries()
-         this.state.isSaving = false
-      }
-   }
+async function saveData() {
+   const { title, blurb, lang, handle } = draft.value
+   if (await save({ title, blurb, lang, handle })) void loadMyDictionaries()
 }
 </script>

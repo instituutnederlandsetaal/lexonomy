@@ -1,130 +1,121 @@
-<template>
-<dict-upload>
-   <LoadingOverlay v-if="state.isUploading"/>
-   <DictNav :links="[['upload', 'Upload']]"/>
-   <h1>Upload</h1>
-   <div class="file-field input-field buttons"
-         style="max-width: 700px;">
-      <div class="btn">
-         <span>Choose XML file</span>
-         <input type="file"
-               id="file" ref="file">
-      </div>
-      <div class="file-path-wrapper">
-         <input class="file-path validate"
-               type="text">
-      </div>
-      <div>
-         <a class="waves-effect waves-light btn btn-primary" :class="{ disabled: state.isUploading || state.isImporting }"
-               @click="doUpload"
-               id="startButton">
-            <i class="material-symbols-outlined left">file_upload</i>Upload file
-         </a>
-      </div>
-   </div>
-   <div>
-      <label>
-         <input type="checkbox"
-               id="purge" ref="purge"/>
-         <span>Purge dictionary before upload</span>
-      </label>
-   </div>
-   <br><br>
-
-   <template v-if="state.infoMessage || state.errorMessage">
-      <h3>Progress</h3>
-      <div v-if="state.infoMessage"
-            class="message messageInfo">
-         {{ state.infoMessage }}
-         <template v-if="state.importFinished">
-            Dictionary import finished. <RouterLink :to="{ name: 'dictionary', params: { dictId: activeDictionary.dictId } }">See dictionary</RouterLink>
-         </template>
-      </div>
-      <div v-if="state.errorMessage"
-            class="message messageError">
-         {{ state.errorMessage }}
-      </div>
-   </template>
-</dict-upload>
-</template>
-
-<script>
-import { activeDictionary, dictionaryWorkspace } from '../js/dictionary-workspace.ts'
+<script setup lang="ts">
+import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { fetchImportErrors, fetchImportStatus, startDictionaryUpload } from '../js/dictionary-files-api.ts'
+import { dictionaryWorkspace } from '../js/dictionary-workspace.ts'
 import { loadMyDictionaries } from '../js/my-dictionaries.ts'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-import { api } from '../js/api.ts'
 
-export default {
-   setup: () => ({ activeDictionary }),
-   components: { DictNav, LoadingOverlay },
-   data() {
-      return {
-         state: {
-            isUploading: false,
-            isImporting: false,
-            importFinished: false,
-            timeoutHandle: null,
-            errorMessage: "",
-            infoMessage: ""
-         }
+const route = useRoute()
+const dictId = computed(() => typeof route.params.dictId === 'string' ? route.params.dictId : '')
+const file = shallowRef<File | null>(null)
+const purge = ref(false)
+const phase = ref<'ready' | 'uploading' | 'importing' | 'finished'>('ready')
+const busy = computed(() => phase.value === 'uploading' || phase.value === 'importing')
+const infoMessage = ref('')
+const errorMessage = ref('')
+let operation = 0
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+
+function reset() {
+   operation++
+   clearTimeout(pollTimer)
+   phase.value = 'ready'
+   file.value = null
+   purge.value = false
+   infoMessage.value = errorMessage.value = ''
+}
+watch(dictId, reset)
+onScopeDispose(reset)
+
+function selectFile(event: Event) {
+   if (event.target instanceof HTMLInputElement) file.value = event.target.files?.[0] ?? null
+}
+
+async function upload() {
+   const current = dictId.value
+   if (!current || !file.value || busy.value) return
+   const version = ++operation
+   const isCurrent = () => operation === version && dictId.value === current
+   phase.value = 'uploading'
+   errorMessage.value = ''
+   infoMessage.value = 'Uploading XML…'
+   let job: Awaited<ReturnType<typeof startDictionaryUpload>>
+   try {
+      job = await startDictionaryUpload(current, file.value, purge.value)
+   } catch {
+      if (isCurrent()) {
+         phase.value = 'ready'
+         errorMessage.value = 'The XML file could not be uploaded.'
+         infoMessage.value = ''
       }
-   },
+      return
+   }
+   if (!isCurrent()) return
+   phase.value = 'importing'
 
-   beforeUnmount() {
-      clearTimeout(this.state.timeoutHandle)
-   },
-
-   methods: {
-      async doUpload() {
-         const file = this.$refs.file.files[0]
-         if (!file || this.state.isUploading || this.state.isImporting) return
-
-         const fd = new FormData()
-         fd.append('myfile', file)
-         if (this.$refs.purge.checked) fd.append('purge', 'on')
-         const dictId = this.activeDictionary.dictId
-         Object.assign(this.state, {
-            isUploading: true,
-            importFinished: false,
-            errorMessage: "",
-            infoMessage: "Upload started, please keep the window open."
-         })
-         try {
-            const { success, file, uploadStart } = await api.post(`${encodeURIComponent(dictId)}/upload.html`, fd)
-            if (!success || !file) throw new Error('Upload rejected')
-            if (this.$el.isConnected) this.pollImport(dictId, { filename: file, uploadStart })
-         } catch {
-            this.state.infoMessage = 'Error while uploading file'
-         } finally {
-            this.state.isUploading = false
-         }
-      },
-
-      async pollImport(dictId, upload) {
-         this.state.isImporting = true
-         const endpoint = `${encodeURIComponent(dictId)}/import.json`
-         try {
-            const response = await api.get(endpoint, upload)
-            if (!this.$el.isConnected || this.activeDictionary.dictId !== dictId) return
-            this.state.infoMessage = response.progressMessage
-            if (response.finished) {
-               this.state.importFinished = true
-               loadMyDictionaries()
-               dictionaryWorkspace.loadEntryList()
-            } else if (response.errors) {
-               this.state.infoMessage = 'There were some errors during XML parsing'
-               const { errorData } = await api.get(endpoint, { ...upload, showErrors: true, truncate: 10000 })
-               this.state.errorMessage = errorData.replaceAll('&lt;', '<')
-            } else {
-               this.state.timeoutHandle = setTimeout(() => this.pollImport(dictId, upload), 2000)
-               return
+   async function poll() {
+      try {
+         const status = await fetchImportStatus(current, job)
+         if (!isCurrent()) return
+         infoMessage.value = status.progressMessage
+         if (status.finished) {
+            phase.value = 'finished'
+            void loadMyDictionaries()
+            void dictionaryWorkspace.refreshEntries(current)
+         } else if (status.errors) {
+            const details = await fetchImportErrors(current, job)
+            if (isCurrent()) {
+               phase.value = 'ready'
+               errorMessage.value = details || 'The XML file could not be imported.'
             }
-         } catch {
-            this.state.infoMessage = 'Error while checking import progress'
+         } else {
+            pollTimer = setTimeout(poll, 2000)
          }
-         this.state.isImporting = false
+      } catch {
+         if (isCurrent()) {
+            phase.value = 'ready'
+            errorMessage.value = 'Import progress could not be checked.'
+         }
       }
    }
+   await poll()
 }
 </script>
+
+<template>
+   <section>
+      <LoadingOverlay v-if="phase === 'uploading'"/>
+      <DictNav :links="[['upload', 'Upload']]"/>
+      <h1>Upload</h1>
+      <form @submit.prevent="upload">
+         <div class="file-field input-field buttons" style="max-width: 700px;">
+            <div class="btn">
+               <span>Choose XML file</span>
+               <input :key="dictId" id="file" type="file" aria-label="Choose XML file" :disabled="busy" @change="selectFile">
+            </div>
+            <div class="file-path-wrapper">
+               <input class="file-path" type="text" aria-hidden="true" tabindex="-1" readonly :value="file?.name ?? ''">
+            </div>
+            <button id="startButton" type="submit" class="waves-effect waves-light btn btn-primary"
+                  :disabled="!file || busy">
+               <i class="material-symbols-outlined left" aria-hidden="true">file_upload</i>Upload file
+            </button>
+         </div>
+         <label>
+            <input id="purge" v-model="purge" type="checkbox" :disabled="busy">
+            <span>Purge dictionary before upload</span>
+         </label>
+      </form>
+
+      <section v-if="infoMessage || errorMessage">
+         <h3>Progress</h3>
+         <div v-if="infoMessage" class="message messageInfo" role="status">
+            {{ infoMessage }}
+            <RouterLink v-if="phase === 'finished'" :to="{ name: 'dictionary', params: { dictId } }">See dictionary</RouterLink>
+         </div>
+         <div v-if="errorMessage" class="message messageError" role="alert">{{ errorMessage }}</div>
+      </section>
+   </section>
+</template>

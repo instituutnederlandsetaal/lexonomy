@@ -1,530 +1,136 @@
 <template>
-  <div>
-    <ul v-for="(typeElement) in renderedChildren"
-        :key="typeElement.name"
-    >
-      <!--        :style="getEncompassingStyles(typeElement.name)"-->
-      <component v-for="element in typeElement.children"
-                 :is="editorComponents[element.componentName]"
-                 :ref="element.props.elementName + element.props.editorChildNumber"
-                 :key="element.props.key"
-                 v-bind="element.props"
-                 :class="{'is-attribute': element.props.isAttribute}"
-                 @input="handleChildUpdate"
-                 @create-element="createElement"
-                 @move-element="moveElement"
-                 @delete-element="deleteElement"
-                 @clone-element="createElement"
-                 style="display: list-item"
-      />
-    </ul>
-  </div>
+   <div>
+      <ul v-for="group in renderedChildren" :key="group.key">
+         <component v-for="field in group.fields" :is="field.component"
+                    :key="field.key"
+                    v-bind="field.props"
+                    :class="{ 'is-attribute': field.props.isAttribute }"
+                    style="display: list-item"
+                    @input="updateField"
+                    @create-element="createElements"
+                    @move-element="moveElement"
+                    @delete-element="deleteElement"/>
+      </ul>
+   </div>
 </template>
 
-<script>
-import {js2xml, xml2js} from "xml-js"
+<script setup lang="ts">
+import { editorContextKey, schemaAncestorsKey } from '../editor-context.ts'
+import { computed, inject, provide, type Component } from 'vue'
+import type { Element } from 'xml-js'
+import { childrenFor, elementDisplay, elementId, emptyElement, type EditorChild } from '../editor-schema.ts'
+import type { ElementPosition, FieldUpdate, NewElement } from '../use-editor-field.ts'
+import InlineComponent from './displayTypes/InlineComponent.vue'
+import PopupComponent from './displayTypes/PopupComponent.vue'
+import SubentryComponent from './displayTypes/SubentryComponent.vue'
 
-export default {
-  inject: ['editorState', 'editorComponents'],
-  name: "ComponentGeneratorComponent",
-  emits: ['input'],
-  props: {
-    children: Array,
-    elementName: String,
-    content: {
-      type: [Object, Array],
-      required: true
-    },
-    showElementsPreview: {
-      type: Boolean,
-      default: false
-    },
-    maxDisplayedChildren: {
-      type: Number,
-      default: -1
-    },
-    hideEmptyElements: {
-      type: Boolean,
-      default: false
-    }
-  },
-  data() {
-    return {
-      displayTypeToComponentMap: {
-        "popup": "PopupComponent",
-        "inline": "InlineComponent",
-        "subentry": "SubentryComponent"
-      },
-      renderedChildren: [],
-      numberOfRenderedChildren: 0,
-      actualContent: {}
+const props = withDefaults(defineProps<{
+   children?: EditorChild[]
+   elementName?: string
+   content: Element
+   showElementsPreview?: boolean
+   maxDisplayedChildren?: number
+   hideEmptyElements?: boolean
+}>(), { maxDisplayedChildren: -1 })
+const emit = defineEmits<{ input: [value: { content: Element }] }>()
+const editor = inject(editorContextKey)!
+const config = computed(() => editor.config)
+const xema = computed(() => config.value.xema)
+const ancestors = inject(schemaAncestorsKey)
+const lineage = computed(() => [...(ancestors?.value ?? []), ...(props.elementName ? [props.elementName] : [])])
+provide(schemaAncestorsKey, lineage)
 
-    }
-  },
-  watch: {
-    content: {
-      handler(newVal) {
-        this.updateContentInChildren(newVal)
-      },
-      deep: true
-    }
-  },
-  created() {
-    //  create components from content
-    this.loadNewData(this.content)
-  },
-  methods: {
-    getEncompassingStyles(elementName) {
-      let gutter = this.editorState.entry.dictConfigs.xemplate[elementName].gutter
-      let listStyle = "none"
-      switch (gutter) {
-        case "disk":
-          listStyle = "disc"
-          break
-        case "square":
-          listStyle = "square"
-          break
-        case "diamond":
-        case "arrow":
-        case "handing":
-          break
-        case "indent":
-          return {marginLeft: "40px"}
-        case "sensenum0":
-          listStyle = "upper-roman"
-          break
-        case "sensenum1":
-          listStyle = "decimal"
-          break
-        case "sensenum2":
-          listStyle = "lower-alpha"
-          break
-        case "sensenum3":
-          listStyle = "lower-roman"
-          break
+const renderedChildren = computed(() => {
+   let remaining = props.maxDisplayedChildren
+   const children = props.children ?? (props.elementName ? childrenFor(xema.value, props.elementName, props.content) : [])
+   return children.flatMap(child => {
+      if (remaining === 0) return []
+      const elementName = child.name
+      const elementData = elementDisplay(config.value.xemplate, xema.value, elementName, props.elementName, child.isAttribute)
+      const attributes = props.content.attributes
+      const matches = child.isAttribute
+         ? [{ type: 'attribute', name: elementName, text: attributes?.[elementName] }]
+         : (props.content.elements ?? []).filter(node => elementId(xema.value, node, props.elementName) === elementName)
+      const component: Component = props.showElementsPreview || child.isAttribute
+         ? InlineComponent
+         : config.value.subbing[elementName] && xema.value.root !== elementName
+            ? SubentryComponent
+            : elementData.displayType === 'popup' ? PopupComponent : InlineComponent
+      let content = matches.length ? matches : [emptyElement(xema.value, elementName)]
+      if (remaining > 0) {
+         content = content.slice(0, remaining)
+         if (elementData.shown) remaining -= content.length
       }
-      return {
-        listStyleType: listStyle,
-        listStylePosition: "inside",
-        textAlign: "left"
-      }
-    },
-    // Update only content of children to prevent re-rendering of whole structure
-    updateContentInChildren(newContent) {
-      if (!newContent || (!newContent.elements && !newContent.attributes)) {
-        return
-      }
-      for (let elementType of this.renderedChildren) {
-        let newContentForChildType
-        if (elementType.children[0].props.isAttribute) {
-          if (newContent.attributes) {
-            newContentForChildType = [{
-              type: "attribute",
-              name: elementType.name,
-              text: newContent.attributes[elementType.name]
-            }]
-          }
-        } else {
-          if (newContent.elements) {
-            newContentForChildType = newContent.elements.filter(element => {
-              return this.getElementName(element) === elementType.name
-            })
-          }
-        }
-        if (!newContentForChildType || (newContentForChildType.length !== elementType.children.length)) {
-          this.loadNewData(newContent)
-          return
-        }
-        let childrenToRemove = []
-        for (let i in elementType.children) {
-          let renderedChild = elementType.children[i]
-
-          let renderedChildRefs = this.$refs[renderedChild.props.elementName + renderedChild.props.editorChildNumber]
-          let renderedChildRef = (renderedChildRefs && renderedChildRefs[0]) || null
-
-          let newContent
-          if (newContentForChildType.length !== elementType.children.length) {
-            newContent = newContentForChildType.find(child => child._index === renderedChild.props.editorChildNumber)
-          } else {
-            newContent = newContentForChildType[renderedChild.props.editorChildNumber]
-          }
-          if (renderedChildRef && newContent) {
-            renderedChildRef.updateContent(newContent)
-          }
-          if (renderedChildRef && !newContent) {
-            // Save indexes of children to remove
-            childrenToRemove.push(Number(i))
-          }
-        }
-        if (childrenToRemove.length > 0) {
-          while (childrenToRemove.length > 0) {
-            // pop from array to guarantee elements are on proper index
-            let indexToRemove = childrenToRemove.pop()
-            elementType.children.splice(indexToRemove, 1)
-          }
-          elementType.children.forEach((child, i) => {
-            child.props.editorChildNumber = i
-          })
-        }
-      }
-    },
-    loadNewData(XMLContent) {
-      this.renderedChildren = []
-      this.numberOfRenderedChildren = 0
-      if (!this.children) {
-        return
-      }
-      for (const child of this.children) {
-        if (this.maxDisplayedChildren !== -1 && this.numberOfRenderedChildren >= this.maxDisplayedChildren) {
-          break
-        }
-        // Get element name
-        let elementName = child.name
-
-        //Extract element data and/or assign defaults
-        let elementData = this.getElementData(elementName, this.elementName, child.isAttribute)
-        this.editorState.entry.dictConfigs.xemplate[elementName] = elementData
-
-        // Calculate component name to render
-        // !!!MUST WAIT FOR NEW ELEMENT DATA TO SET!!!
-        let componentName = this.getComponentFromElementName(elementName, child.isAttribute)
-
-
-        //  Get XML content for current element instance
-        let content = [{}]
-        if (child.isAttribute) {
-          let attrValue = XMLContent.attributes && XMLContent.attributes[elementName]
-          content = [{type: "attribute", name: elementName, text: attrValue}]
-        } else {
-          if (Array.isArray(XMLContent && XMLContent.elements)) {
-            content = XMLContent.elements.filter(element => {
-              return this.getElementName(element) === elementName
-            })
-            if (content.length === 0) {
-              content = [{}]
-            }
-          }
-        }
-        // Decide if multiple instances need to be made and push children to array to be rendered
-        let sameTypeChildren = []
-        if (Array.isArray(content)) {
-          for (const index in content) {
-            const contentInstance = content[index]
-            // Add elements to render list
-            sameTypeChildren.push({
-              componentName: componentName,
-              props: {
-                elementName: elementName,
-                children: this.getElementChildren(elementName, contentInstance),
-                content: contentInstance,
-                elementData: elementData,
-                editorChildNumber: Number(index),
-                parentElementName: this.elementName,
-                numberOfElements: content.length,
-                isAttribute: child.isAttribute,
-                showElementsPreview: this.showElementsPreview,
-                hideEmptyElements: this.hideEmptyElements,
-                key: Math.random()
-              }
-            })
-            if (this.maxDisplayedChildren !== -1) {
-              this.numberOfRenderedChildren += this.calculateRenderedElements(elementName, child.isAttribute, contentInstance)
-              if (this.numberOfRenderedChildren >= this.maxDisplayedChildren) {
-                break
-              }
-            }
-          }
-        } else {
-          sameTypeChildren.push({
-            componentName: componentName,
+      const key = `${child.isAttribute ? '@' : ''}${elementName}`
+      return [{
+         key,
+         fields: content.map((node: Element, index) => ({
+            key: index,
+            component,
             props: {
-              elementName: elementName,
-              children: this.getElementChildren(elementName, content),
-              content: content,
-              elementData: elementData,
-              editorChildNumber: 0,
-              parentElementName: this.elementName,
-              numberOfElements: content.length,
-              isAttribute: child.isAttribute,
-              showElementsPreview: this.showElementsPreview,
-              hideEmptyElements: this.hideEmptyElements,
-              key: Math.random()
+               elementName,
+               children: child.isAttribute || (!matches.length && lineage.value.includes(elementName))
+                  ? [] : childrenFor(xema.value, elementName, node),
+               content: node,
+               elementData,
+               editorChildNumber: index,
+               parentElementName: props.elementName,
+               numberOfElements: matches.length,
+               isAttribute: child.isAttribute ?? false,
+               showElementsPreview: props.showElementsPreview,
+               hideEmptyElements: props.hideEmptyElements,
+               maxDisplayedChildren: props.maxDisplayedChildren
             }
-          })
-          if (this.maxDisplayedChildren !== -1) {
-            this.numberOfRenderedChildren += this.calculateRenderedElements(elementName, child.isAttribute, content)
-            if (this.numberOfRenderedChildren >= this.maxDisplayedChildren) {
-              break
-            }
-          }
-        }
+         }))
+      }]
+   })
+})
 
-        this.renderedChildren.push({
-          name: elementName,
-          children: sameTypeChildren
-        })
-      }
-    },
+function findSiblingIndexes(name: string) {
+   return (props.content.elements ?? []).flatMap((element, index) =>
+      elementId(xema.value, element, props.elementName) === name ? [index] : [])
+}
 
-    calculateRenderedElements(elementName, isAttribute, content) {
-      let xemplate = this.editorState.entry.dictConfigs.xemplate[elementName]
-      if (isAttribute) {
-        if (xemplate && !xemplate.shown) {
-          return 0
-        }
-        return 1
-      }
+function updateField(update: FieldUpdate) {
+   if (update.isAttribute) {
+      emit('input', { content: { ...props.content, attributes: { ...props.content.attributes, ...update.content } } })
+      return
+   }
+   const positions = findSiblingIndexes(update.elementName)
+   const elements = [...(props.content.elements ?? [])]
+   const target = positions[update.editorChildNumber]
+   if (target === undefined) {
+      elements.splice((positions.at(-1) ?? elements.length - 1) + 1, 0, update.content)
+   } else {
+      elements[target] = update.content
+   }
+   emit('input', { content: { ...props.content, elements } })
+}
 
-      let xema = this.editorState.entry.dictConfigs.xema.elements[elementName]
-      let renderedElements = 0
-      if (xema.attributes) {
-        Object.keys(xema.attributes).forEach(attr => {
-          const attrXemplate = this.editorState.entry.dictConfigs.xemplate[attr]
-          if (!attrXemplate || attrXemplate.shown) {
-            renderedElements++
-          }
-          return renderedElements
-        })
-      }
-      switch (xema.filling) {
-        case "txt":
-        case "lst":
-        case "med":
-        case "inl":
-        case "emp":
-          if (!xemplate || xemplate.shown) {
-            renderedElements++
-          }
-          return renderedElements
-        case "chd":
-          this.getElementChildren(elementName, content).forEach(child => {
-            renderedElements += this.calculateRenderedElements(child.name, {elements: []})
-          })
-          if (!xemplate || xemplate.shown) {
-            renderedElements++
-          }
-          return renderedElements
-      }
-    },
+function createElements(input: NewElement | NewElement[]) {
+   const elements = [...(props.content.elements ?? [])]
+   for (const { name, content } of Array.isArray(input) ? input : [input]) {
+      const indexes = elements.flatMap((element, index) =>
+         elementId(xema.value, element, props.elementName) === name ? [index] : [])
+      const addition = content ? JSON.parse(JSON.stringify(content)) as Element : emptyElement(xema.value, name)
+      elements.splice((indexes.at(-1) ?? elements.length - 1) + 1, 0, addition)
+   }
+   emit('input', { content: { ...props.content, elements } })
+}
 
-    createElementTemplate(elementName) {
-      return xml2js(`<${elementName}></${elementName}>`, this.editorState.xml2jsConfig).elements
-    },
-    getElementChildren(elementName, content) {
-      let elementInXema = this.editorState.entry.dictConfigs.xema.elements[elementName]
-      let children = elementInXema && elementInXema.children
-      if (elementInXema && Object.keys(elementInXema.attributes || {}).length > 0) {
-        let mappedAttributes = Object.keys(elementInXema.attributes).map(att => {
-          return {name: att, isAttribute: true}
-        })
-        children = mappedAttributes.concat(children)
-      }
-      if (content.elements) {
-        let elemntsInContent = content.elements.filter(el => !!el.name)
-        let differentElementsInXMLContent = elemntsInContent.map((value) => value.name).filter((value, index, _arr) => _arr.indexOf(value) === index).length
-        if (!elementInXema || differentElementsInXMLContent !== (elementInXema.children && elementInXema.children.length) || 0) {
-          let artificialChildren = []
-          if (elemntsInContent) {
-            artificialChildren = elemntsInContent.map(element => {
-              return {min: 1, max: 1, name: element.name}
-            })
-          }
-          children = children || []
-          for (const child of artificialChildren) {
-            if (!children.find(el => el.name === child.name)) {
-              children.push(child)
-            }
-          }
-        }
-      }
-      return children
-    },
+function moveElement({ name, position, direction }: ElementPosition & { direction: number }) {
+   const positions = findSiblingIndexes(name)
+   const from = positions[position], to = positions[position + direction]
+   if (from === undefined || to === undefined || !props.content.elements) return
+   const elements = [...props.content.elements]
+   ;[elements[from], elements[to]] = [elements[to], elements[from]]
+   emit('input', { content: { ...props.content, elements } })
+}
 
-    getElementData(elementName, parentName, isAttribute) {
-      let formatterConfig = this.editorState.entry.dictConfigs.xemplate
-      let elementData
-      if (isAttribute) {
-        elementData = formatterConfig[parentName].attributes && formatterConfig[parentName].attributes[elementName]
-      } else {
-        elementData = formatterConfig[elementName]
-      }
-
-      if (!elementData) {
-        elementData = {
-          shown: true,
-          displayType: "inline",
-          valueRenderType: "text-input"
-        }
-      } else {
-        if (!("shown" in elementData)) {
-          elementData.shown = true
-        }
-        if (!("displayType" in elementData)) {
-          elementData.displayType = "inline"
-        }
-        if (!("valueRenderType" in elementData)) {
-          elementData.valueRenderType = "text-input"
-        }
-      }
-      return elementData
-    },
-    handleChildUpdate(data) {
-      let content = this.createDeepCopy(this.content)
-      if (data.isAttribute) {
-        content.attributes = {...content.attributes, ...data.content}
-        this.$emit("input", {content: content})
-        return true
-      }
-      // Update content without creating new content/elements
-      if (!content.elements) {
-        content.elements = this.createElementTemplate(data.elementName)
-      } else if (!content.elements.find(el => {
-        return this.getElementName(el) === data.elementName
-      })) {
-        content.elements.push(data.content)
-        this.$emit("input", {content: content})
-        return
-      }
-
-      let consecutiveNumber = 0
-      let contentUpdated = false
-      for (const i in content.elements) {
-        if (content.elements[i].name === data.elementName) {
-          if (consecutiveNumber === data.editorChildNumber) {
-            contentUpdated = true
-            content.elements[i] = data.content
-            break
-          }
-          consecutiveNumber++
-        }
-      }
-      if (!contentUpdated) {
-        this.appendElementAfterSameNameSiblings(data.elementName, content, data.content)
-      }
-      this.$emit("input", {content: content})
-    },
-
-    getComponentFromElementName(elementName, parentName, isAttribute) {
-      if (this.showElementsPreview) {
-        return this.displayTypeToComponentMap["inline"]
-      }
-      if (Object.keys(this.editorState.entry.dictConfigs.subbing).includes(elementName)) {
-        if (this.editorState.entry.doctype !== elementName) {
-          return this.displayTypeToComponentMap["subentry"]
-        }
-      }
-
-      let formatterConfig = this.editorState.entry.dictConfigs.xemplate
-      let elementConfig
-      if (isAttribute) {
-        elementConfig = formatterConfig[parentName].attributes && formatterConfig[parentName].attributes[elementName]
-      } else {
-        elementConfig = formatterConfig[elementName]
-      }
-      let type = (elementConfig && elementConfig.displayType) || "inline"
-      return this.displayTypeToComponentMap[type]
-    },
-
-    appendElementAfterSameNameSiblings(data, content, newContent) {
-      let elements = content.elements || []
-      let locationOfLastElement = elements.map(el => el.name).lastIndexOf(data)
-      if (locationOfLastElement >= 0) {
-
-        elements.splice(locationOfLastElement + 1, 0, newContent)
-      } else {
-        elements.push(newContent)
-      }
-      content.elements = elements
-      this.loadNewData(content)
-
-    },
-
-    createElement(data) {
-      let nextChildNumber = (this.content.elements && this.content.elements.filter(el => el.name === data.name).length) || 0
-      this.handleChildUpdate({
-        elementName: data.name,
-        editorChildNumber: nextChildNumber,
-        content: data.content || this.createElementTemplate(data.name)[0]
-      })
-    },
-
-    moveElement({name, direction, position}) {
-      let elements = this.content.elements || []
-      if (!this.isNewPositionInBounds(elements, name, position, direction)) {
-        return
-      }
-      let elementToMoveIndex = this.getPositionOfElementInContent(name, position, this.content)
-      var element = elements[elementToMoveIndex]
-      elements.splice(elementToMoveIndex, 1)
-      elements.splice(elementToMoveIndex + direction, 0, element)
-
-      let content = Object.assign({}, this.content)
-      content.elements = elements
-      this.loadNewData(content)
-      this.$emit("input", {content: content})
-    },
-    deleteElement({name, position}) {
-      let elements = this.content.elements || []
-      let consecutiveNumber = 0
-      let elementToDeleteIndex = -1
-      for (const i in elements) {
-
-        if (this.getElementName(elements[i]) === name) {
-          elements[i]._index = consecutiveNumber
-          if (consecutiveNumber === position) {
-            elementToDeleteIndex = i
-          }
-          consecutiveNumber++
-        }
-      }
-      if (elementToDeleteIndex === -1) {
-        return
-      }
-      elements.splice(elementToDeleteIndex, 1)
-
-      let content = Object.assign({}, this.content)
-      content.elements = elements
-      this.$emit("input", {content: content})
-    },
-    isNewPositionInBounds(elements, elementName, position, direction) {
-      let newPosition = position + direction
-      let elementsLength = elements.filter(el => this.getElementName(el) === elementName).length
-      return newPosition >= 0 && newPosition < elementsLength
-    },
-    getPositionOfElementInContent(name, position, content) {
-      let elements = content.elements
-      let consecutiveNumber = 0
-      let elementToMoveIndex
-      for (const i in elements) {
-        if (this.getElementName(elements[i]) === name) {
-          if (consecutiveNumber === position) {
-            elementToMoveIndex = i
-            break
-          }
-          consecutiveNumber++
-        }
-      }
-      return Number(elementToMoveIndex)
-    },
-    getElementName(element) {
-      if (element.name === "lxnm:subentryParent") {
-        return element.attributes.doctype
-      }
-      return element.name
-    },
-    createDeepCopy(content) {
-      let tmpRoot = this.createElementTemplate(this.elementName)[0]
-      if (content.elements) {
-        tmpRoot.elements = content.elements
-      }
-      if (content.attributes) {
-        tmpRoot.attributes = content.attributes
-      }
-      let xml = js2xml({elements: [tmpRoot]}, this.editorState.xml2jsConfig)
-      const newObject = xml2js(xml, this.editorState.xml2jsConfig)
-      return (newObject.elements) ? newObject.elements[0] : {}
-    }
-  }
+function deleteElement({ name, position }: ElementPosition) {
+   const index = findSiblingIndexes(name)[position]
+   if (index === undefined || !props.content.elements) return
+   emit('input', { content: { ...props.content, elements: props.content.elements.filter((_, row) => row !== index) } })
 }
 </script>
 

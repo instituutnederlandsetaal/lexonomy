@@ -1,76 +1,36 @@
 <template>
-  <PopupDisplay
-          :z-index="zIndex"
-          :model-value="modelValue"
-          :hideActions="true"
-          @update:model-value="$emit('update:modelValue', $event)"
-  >
-    <h2>Move selected {{ computedElementName }} to:</h2>
-    <div class="parents">
-      <ReadOnlyComponentGenerator
-        :children="children"
-        :elementName="elementName"
-        :content="possibleParentElements"
-        @selected-element="handleSelectedElement"
-      />
-    </div>
-
-    <div class="actions">
-      <button @click="$emit('update:modelValue', false)">Cancel</button>
-    </div>
-  </PopupDisplay>
+   <PopupDisplay :model-value="modelValue" :title="`Move selected ${name}`"
+                 :z-index="zIndex" hide-actions @update:model-value="emit('update:modelValue', $event)">
+      <h2>Move selected {{ name }} to:</h2>
+      <div v-if="possibleParentElements.length" class="parents">
+         <ReadOnlyComponentGenerator :content="possibleParentElements" @selected-element="select"/>
+      </div>
+      <p v-else>No other parent can contain this element.</p>
+      <div class="actions">
+         <button type="button" @click="emit('update:modelValue', false)">Cancel</button>
+      </div>
+   </PopupDisplay>
 </template>
 
-<script>
-import PopupDisplay from "./PopupDisplay.vue"
-import computedElementName from "../shared-resources/mixins/computedElementName.js"
-import ReadOnlyComponentGenerator from "./ReadOnlyComponentGenerator.vue"
+<script setup lang="ts">
+import type { ParentCandidate } from '../editor-schema.ts'
+import PopupDisplay from './PopupDisplay.vue'
+import ReadOnlyComponentGenerator from './ReadOnlyComponentGenerator.vue'
 
-export default {
-  name: "SelectElementFromArray",
-  components: {ReadOnlyComponentGenerator, PopupDisplay},
-  mixins: [
-    computedElementName
-  ],
-  emits: ['update:modelValue', 'selected-element'],
-  props: {
-    modelValue: {
-      type: Boolean,
-      required: true
-    },
-    zIndex: {
-      type: String,
-      default: "100"
-    },
-    elementName: {
-      type: String,
-      default: ""
-    },
-    possibleParentElements: {
-      type: Array,
-      required: true
-    }
-  },
-  computed: {
-    children() {
-      return this.possibleParentElements.map(el => el.name).filter((item, i, ar) => ar.indexOf(item) === i).map(name => {return {name: name}})
-    }
-  },
-  methods: {
-    handleSelectedElement(element) {
-      this.$emit('selected-element', element)
-      this.$emit('update:modelValue', false)
-    },
-  }
+withDefaults(defineProps<{
+   modelValue: boolean
+   zIndex?: string
+   name: string
+   possibleParentElements: ParentCandidate[]
+}>(), { zIndex: '100' })
+const emit = defineEmits<{ 'update:modelValue': [open: boolean]; 'selected-element': [candidate: ParentCandidate] }>()
+
+function select(candidate: ParentCandidate) {
+   emit('selected-element', candidate)
+   emit('update:modelValue', false)
 }
 </script>
 
-<style lang="scss" scoped>
-
-.parents {
-  margin: 24px 0;
-  max-height: 600px;
-  overflow-Y: auto;
-}
-
+<style scoped>
+.parents { margin: 24px 0; }
 </style>

@@ -2,14 +2,15 @@
 
 import os
 import os.path
+import atexit
 import sqlite3
 import sys
 import datetime
 import json
-import xml.sax
-import re
 import argparse
+import re
 from xml.parsers.expat import ParserCreate
+from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ops
 
@@ -20,14 +21,18 @@ parser.set_defaults(purge=False)
 parser.add_argument("-pp", "--purge-history", help="Purge the dicationary, and also purge the history. This will speed up future operations. [default false]", dest="purge_history", action="store_true")
 parser.add_argument("--no-purge-history", dest="purge_history", action="store_false")
 parser.set_defaults(purge_history=False)
-parser.add_argument("-a", "--save-all-content", help="Also save non-entry content, such as enclosing structure and headers, etc. [default false]", dest="save_all_content", action="store_true")
+# Legacy import callers may pass these flags. The database stores entries only.
+parser.add_argument("-a", "--save-all-content", help=argparse.SUPPRESS, dest="save_all_content", action="store_true")
 parser.add_argument("--no-save-all-content", dest="save_all_content", action="store_false")
 parser.set_defaults(save_all_content=False)
 parser.add_argument("-u", "--user", help="Email of author (lexonomy account)", default="IMPORT@LEXONOMY")
+parser.add_argument("--remove-upload", action="store_true", help="Remove the temporary upload after importing.")
 parser.add_argument("database", help="Path to dictionary.sqlite, this should already exist.")
 parser.add_argument("file", help="Path to file_to_import.xml")
 args = parser.parse_args()
 
+if args.remove_upload:
+    atexit.register(Path(args.file).unlink, missing_ok=True)
 
 print("PID "+ str(os.getpid()), flush=True)
 print("Import started. Please wait...", flush=True)
@@ -36,9 +41,8 @@ dictID = os.path.basename(args.database).replace(".sqlite", "")
 db = sqlite3.connect(args.database, )
 db.row_factory = sqlite3.Row
 db.isolation_level=None
-db.execute('PRAGMA synchronous = 0')
 db.execute("PRAGMA cache_size = -100000") # about 100 megs
-db.execute("begin")
+db.execute("begin immediate")
 
 historiography: dict[str, str] = {
     "importStart": str(datetime.datetime.now(datetime.timezone.utc)),
@@ -58,168 +62,61 @@ if args.purge or args.purge_history:
     db.execute("delete from sub")
     db.execute("delete from searchables")
     db.execute("delete from linkables")
-    db.execute("delete from sub")
     db.execute("delete from entries")
-    db.commit()
-    print("Compressing database...", flush=True)
-    db.execute("vacuum")
-    db.commit()
 
-# By default we assume the root of the defined document structure is an entry
-# and not the root of the entire dictionary.
-# (otherwise that would mean your entire dictionary would be stored in 1 entry)
-configs: ops.Configs = ops.readDictConfigs(db)
-xema: ops.ConfigXema = configs.get("xema", {})
-entryTag: str = xema.get("root", "")
-rootTag: str = "" # unused apart from entry tag detection code
-xmldata: bytes = open(args.file, 'rb').read() # NOTE: do not decode into string, otherwise we cannot extract the entries because byte and char offsets will mismatch. What I think happens is  sax returns byte offsets, while if we decode into string here, slices on this string will interpret indices as char offsets.
+def import_entries(data: bytes, entry_tag: str) -> int:
+    parser = ParserCreate("utf-8")
+    opening_tag = re.compile(rb"""<[^"'<>]*(?:(?:"[^"]*"|'[^']*')[^"'<>]*)*>""")
+    depth = 0
+    entry_start = 0
+    entry_depth = None
+    entry_is_empty = False
+    imported = 0
 
-if entryTag:
-    print("Entry tag from xema: " + entryTag, flush=True)
+    def start_element(name, attrs):
+        nonlocal depth, entry_tag, entry_start, entry_depth, entry_is_empty
+        depth += 1
+        if not entry_tag and depth == 2:
+            entry_tag = name
+        if name == entry_tag and entry_depth is None:
+            entry_start = parser.CurrentByteIndex
+            entry_depth = depth
+            opening = opening_tag.match(data, entry_start)
+            if not opening:
+                raise ValueError("An entry must start with an XML opening tag.")
+            entry_is_empty = data[opening.end() - 2:opening.end()] == b"/>"
 
-# If there is no document structure defined (the xema is empty?) 
-# Then assume the dictionary looks like this, so detect the first child of the root, and set that as entryTag
-# <dictionary> <!-- or whatever else -->
-#   <entry>...</entry>
-#   <entry>...</entry>
-# </dictionary>
-if not entryTag:
-    # first pass -- check what is entry and how many entries we have
-    class handlerFirst(xml.sax.ContentHandler):
-        def startElement(self, name, attrs): # first element is the root, second element is the entry
-            global rootTag
-            global entryTag
-            if rootTag == "":
-                rootTag = name
-            elif entryTag == "":
-                entryTag = name
-            else:
-                pass
-        def endElement(self, name):
-            global entryCount
-            global entryTag
-            if name == entryTag:
-                entryCount += 1
+    def end_element(name):
+        nonlocal depth, entry_depth, imported
+        if depth == entry_depth:
+            end = parser.CurrentByteIndex
+            # Expat points past an empty tag and at the start of an explicit closing tag.
+            if not entry_is_empty:
+                end = data.index(b">", end) + 1
+            xml = data[entry_start:end].decode("utf-8")
+            _, _, success, _ = ops.createEntry(db, configs, xml, args.user, commit=False)
+            if not success:
+                raise ValueError("An entry could not be imported.")
+            imported += 1
+            if imported % 100 == 0:
+                percent = min(99, end * 100 // len(data))
+                print(f"{percent}% - {imported} entries imported so far...", flush=True)
+            entry_depth = None
+        depth -= 1
 
-    # Remove leading declarations. (NOTE: ported from old code - why do we do this? does SAX report these as elements and we think they're the entry?)
-    # Regex works on byte arrays, but all arguments must be bytes.
-    xmldata = re.sub('<\\?xml[^?]*\\?>'.encode('utf-8'), b'', xmldata)
-    xmldata = re.sub('<!DOCTYPE[^>]*>'.encode('utf-8'), b'', xmldata)
-    try:
-        saxParser = xml.sax.parseString(xmldata, handlerFirst())
-    except xml.sax._exceptions.SAXParseException as e:
-        if "junk after document element" in str(e):
-            xmldata = "<fakeroot>"+xmldata+"</fakeroot>"
-            rootTag = ""
-            entryTag = ""
-            entryCount = 0
-            saxParser = xml.sax.parseString(xmldata, handlerFirst()) # if this errors too, just throw
-        else:
-            if entryTag == "":
-                print("Not possible to detect element name for entry, please fix errors:", flush=True)
-                print(e, file=sys.stderr, flush=True)
-                sys.exit()
-
-if not entryTag:
-    print("Not possible to detect element name for entry, define a xema in the database, or fix errors in xml file", flush=True)
-    sys.exit()
-
-p = ParserCreate("utf-8")
-elementStarts: list[int] = []
-addedUntil = 0
-justClosedEntry = False
-inEntry = False
-restOfDocument: list[str] = []
-entriesImported = 0
-totalData = len(xmldata)
-
-def indexEntry():
-    global p
-    global elementStarts
-    global addedUntil
-    global justClosedEntry
-    global inEntry
-    global restOfDocument
-    global entriesImported
-    if justClosedEntry:
-        startOfEntry = elementStarts.pop()
-        endOfEntry = p.CurrentByteIndex
-        entrycontent = xmldata[startOfEntry:endOfEntry]
-        justClosedEntry = False
-        addedUntil = p.CurrentByteIndex
-
-        id, xml, success, feedback = ops.createEntry(db, configs, entrycontent.decode("utf-8"), args.user)
-        if success: 
-            entriesImported = entriesImported + 1
-            if args.save_all_content:
-                restOfDocument.append(f"<lxnm:entry id=\"{id}\"/>")
-
-        percent = int(addedUntil / totalData * 100)
-        if ((entriesImported % 100) == 0):
-            print(f"{percent}% - {entriesImported} entries imported so far...", flush=True)
-
-def indexInBetween():
-    global p
-    global elementStarts
-    global addedUntil
-    global justClosedEntry
-    global inEntry
-    global restOfDocument
-
-    # something just closed
-    # when do we need to add it?
-    # that's all, now to add 
-    if not args.save_all_content or justClosedEntry or inEntry:
-        return
-    content = xmldata[addedUntil:p.CurrentByteIndex]
-    
-    restOfDocument.append(content)
-    addedUntil = p.CurrentByteIndex
+    parser.StartElementHandler = start_element
+    parser.EndElementHandler = end_element
+    parser.Parse(data, True)
+    return imported
 
 
-# 3 handler functions
-def start_element(name, attrs):
-    global p
-    global elementStarts
-    global addedUntil
-    global justClosedEntry
-    global inEntry
-    global restOfDocument
-    indexEntry()
-    indexInBetween()
-    if name == entryTag:
-        inEntry = True
+configs = ops.readDictConfigs(db)
+xema = configs["xema"]
+entry_tag = ops.xema_get_element_name_from_id(xema, xema["root"]) if xema.get("root") else ""
+entries_imported = import_entries(Path(args.file).read_bytes(), entry_tag)
+if not entries_imported:
+    raise ValueError("The XML file contains no matching entries. The existing dictionary was kept.")
 
-    elementStarts.append(p.CurrentByteIndex)
-
-def end_element(name):
-    global p
-    global elementStarts
-    global addedUntil
-    global justClosedEntry
-    global inEntry
-    global restOfDocument
-    indexEntry()
-    indexInBetween()
-    if name == entryTag:
-        justClosedEntry = True
-        inEntry = False
-    else:
-        justClosedEntry = False
-        elementStarts.pop()
-    
-def char_data(data: str):
-    indexEntry()
-
-p.StartElementHandler = start_element
-p.EndElementHandler = end_element
-p.CharacterDataHandler = char_data
-
-p.Parse(xmldata)
-
-
-# finished
 db.commit()
 db.close()
-print(f"100% - {entriesImported} total entries imported.", flush=True)
-exit()
+print(f"100% - {entries_imported} total entries imported.", flush=True)

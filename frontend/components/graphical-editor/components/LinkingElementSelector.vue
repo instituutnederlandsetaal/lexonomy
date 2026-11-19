@@ -1,194 +1,120 @@
 <template>
-  <PopupDisplay
-    class="linking-element-selector"
-    :z-index="zIndex"
-    :model-value="modelValue"
-    @cancel="cancelAddLink"
-    @save="linkToElement"
-  >
-    <h2>Link selected {{ computedElementName }} to:</h2>
-    <div class="popup-header">
-        <p class="text--md">Dictionary:</p>
-        <select ref="dictionary" name="dictionary" v-model="selectedDictionary">
-          <option v-for="dict in linkableDicts" :key="dict.id" :value="dict.id">{{ dict.title }}</option>
-        </select>
-      <input v-model="searchTerm" placeholder="Filter" type="text">
-    </div>
-    <div class="links">
-      <div v-for="(el, i) in displayedLinks"
-           :key="i"
-           class="link"
-           :class="{'selected': selectedElement === i}"
-           @click="selectedElement = i"
-      >
-        <p>{{ el.element }}: {{ el.link }} ({{ el.preview }})</p>
+   <PopupDisplay class="linking-element-selector" :z-index="zIndex" :model-value="modelValue"
+                 :title="`Link selected ${name}`" :save-disabled="saving || !selection" @cancel="emit('update:modelValue', false)" @save="linkToElement">
+      <h2>Link selected {{ name }} to:</h2>
+      <div class="popup-header">
+         <label for="link-dictionary" class="text--md">Dictionary:</label>
+         <FormSelect id="link-dictionary" v-model="dictionary" :options="dictionaries" aria-label="Dictionary"/>
+         <input v-model="searchTerm" placeholder="Filter" type="search" aria-label="Filter link targets">
       </div>
-    </div>
-  </PopupDisplay>
+      <p v-if="loading" role="status">Loading targets…</p>
+      <p v-else-if="failure" role="alert">Could not load link targets.</p>
+      <p v-else-if="!displayedLinks.length">No matching link targets.</p>
+      <div v-else class="links">
+         <label v-for="(target, index) in displayedLinks" :key="index" class="link" :class="{ selected: selection === target }">
+            <input type="radio" v-model="selection" :value="target" name="link-target" class="browser-default"/>
+            <span>{{ target.element }}: {{ target.link }} {{ target.preview ? `(${target.preview})` : '' }}</span>
+         </label>
+      </div>
+   </PopupDisplay>
 </template>
 
-<script>
+<script setup lang="ts">
+import { editorContextKey, notifyLinksChangedKey } from '../editor-context.ts'
+import { computed, inject, ref, watch } from 'vue'
 import Materialize from '../../../libs/materialize/materialize.min.js'
-import { api } from '../../../js/api.ts'
-import PopupDisplay from "./PopupDisplay.vue"
-import computedElementName from "../shared-resources/mixins/computedElementName.js"
+import { entryEditorApi, type LinkTarget } from '../../../js/entry-editor-api.ts'
+import { xmlElementName } from '../../../js/xema.ts'
+import FormSelect from '../../FormSelect.vue'
+import PopupDisplay from './PopupDisplay.vue'
 
-export default {
-  inject: ['editorState', 'notifyLinksChanged'],
-  name: "LinkingElementSelector",
-  components: {PopupDisplay},
-  mixins: [
-    computedElementName
-  ],
-  emits: ['update:modelValue'],
-  props: {
-    modelValue: {
-      type: Boolean,
-      required: true
-    },
-    zIndex: {
-      type: String,
-      default: "100"
-    },
-    elementName: {
-      type: String,
-      default: ""
-    },
-    sourceId: {
-      type: String,
-      default: null
-    },
-  },
-  computed: {
-    linkableDicts() {
-      return (this.editorState.entry.userDicts || []).filter(dict => dict.hasLinks)
-    },
-    displayedLinks() {
-      const term = this.searchTerm.toLowerCase()
-      return this.availableLinks.filter(link =>
-        [link.element, link.link, link.preview].some(value => value.toLowerCase().includes(term))
-      ).slice(0, 40)
-    }
-  },
-  watch: {
-    selectedDictionary() {
-      this.getLinkableElements()
-    },
-    searchTerm() {
-      this.selectedElement = null
-    }
-  },
-  data() {
-    return {
-      selectedDictionary: null,
-      selectedElement: null,
-      searchTerm: "",
-      availableLinks: [],
-      saving: false
-    }
-  },
-  created() {
-    this.selectedDictionary = this.linkableDicts[0] && this.linkableDicts[0].id
-  },
-  mounted() {
-    if (this.$refs.dictionary) {
-      Materialize.FormSelect.init(this.$refs.dictionary)
-    }
-  },
-  beforeUnmount() {
-    if (this.$refs.dictionary) {
-      Materialize.FormSelect.getInstance(this.$refs.dictionary)?.destroy()
-    }
-  },
-  methods: {
-    async getLinkableElements() {
-      this.selectedElement = null
-      this.availableLinks = []
-      const dictionary = this.selectedDictionary
-      if (!dictionary) return
-      const request = api.get(`${encodeURIComponent(dictionary)}/linkablelist.json`)
-      this.linkRequest = request
-      try {
-        const { links } = await request
-        if (this.linkRequest === request) this.availableLinks = links
-      } catch {
-        if (this.linkRequest === request) Materialize.toast({ html: 'Could not load link targets.' })
-      }
-    },
-    cancelAddLink() {
-      this.$emit("update:modelValue", false)
-    },
-    async linkToElement() {
-      const selectedEl = this.displayedLinks[this.selectedElement]
-      if (!selectedEl || this.saving) return
-      const params = {
-        source_el: this.elementName,
-        source_id: this.sourceId,
-        target_dict: this.selectedDictionary,
-        target_el: selectedEl.element,
-        target_id: selectedEl.link,
-      }
-      this.saving = true
-      try {
-        const { success } = await api.get(`${encodeURIComponent(this.editorState.entry.dictId)}/links/add`, params)
-        if (!success) throw new Error('Link rejected')
-        this.notifyLinksChanged()
-        Materialize.toast({html: "Linked!"})
-        this.$emit("update:modelValue", false)
-      } catch {
-        Materialize.toast({html: "Could not add the link."})
-      } finally {
-        this.saving = false
-      }
-    }
-  }
+const props = withDefaults(defineProps<{
+   modelValue: boolean
+   zIndex?: string
+   elementName: string
+   sourceId?: string | number
+}>(), { zIndex: '100' })
+const emit = defineEmits<{ 'update:modelValue': [open: boolean] }>()
+const editor = inject(editorContextKey)!
+const notifyLinksChanged = inject(notifyLinksChangedKey)!
+const name = computed(() => xmlElementName(editor.config.xema, props.elementName))
+const dictionaries = computed(() => editor.userDicts.filter(dict => dict.hasLinks)
+   .map(dict => ({ value: dict.id, label: dict.title })))
+const dictionary = ref(dictionaries.value[0]?.value)
+const searchTerm = ref('')
+const availableLinks = ref<LinkTarget[]>([])
+const selection = ref<LinkTarget>()
+const loading = ref(false)
+const failure = ref(false)
+const saving = ref(false)
+const displayedLinks = computed(() => {
+   const term = searchTerm.value.toLowerCase()
+   return availableLinks.value.filter(link =>
+      [link.element, link.link, link.preview].some(value => value?.toLowerCase().includes(term))
+   ).slice(0, 40)
+})
+
+watch(dictionaries, options => {
+   if (!options.some(option => option.value === dictionary.value)) dictionary.value = options[0]?.value
+})
+watch(searchTerm, () => { selection.value = undefined })
+watch([dictionary, () => props.modelValue], async ([target, open], _, onCleanup) => {
+   availableLinks.value = []
+   selection.value = undefined
+   failure.value = false
+   loading.value = Boolean(target && open)
+   if (!target || !open) return
+   let current = true
+   onCleanup(() => { current = false })
+   try {
+      const { links } = await entryEditorApi.linkTargets(target)
+      if (current) availableLinks.value = links
+   } catch {
+      if (current) failure.value = true
+   } finally {
+      if (current) loading.value = false
+   }
+}, { immediate: true })
+
+async function linkToElement() {
+   const target = selection.value
+   if (!target || !dictionary.value || !props.sourceId || saving.value) return
+   saving.value = true
+   try {
+      const { success } = await entryEditorApi.addLink(editor.dictId, {
+         source_el: name.value,
+         source_id: String(props.sourceId),
+         target_dict: dictionary.value,
+         target_el: target.element,
+         target_id: target.link
+      })
+      if (!success) throw new Error('Link rejected')
+      notifyLinksChanged()
+      Materialize.toast({ html: 'Linked!' })
+      emit('update:modelValue', false)
+   } catch {
+      Materialize.toast({ html: 'Could not add the link.' })
+   } finally {
+      saving.value = false
+   }
 }
 </script>
 
-<style lang="scss">
-.linking-element-selector {
-  .popup-header {
-    display: flex;
-    align-items: center;
-
-    p {
-      margin-right: 8px;
-    }
-
-    .select-wrapper {
-      max-width: fit-content;
-      margin-right: 15px;
-    }
-
-    input {
-      max-width: 400px;
-      margin: 0;
-    }
-
-    button {
-      margin: 0 16px;
-    }
-
-  }
-
-  .links {
-    margin: 24px 0;
-    max-height: calc(100% - 165px);
-    overflow-Y: auto;
-  }
-
-  .link {
-    text-align: left;
-    padding: 4px;
-    cursor: pointer;
-
-    &.selected {
-      background: #dedede;
-    }
-
-    &:not(:first-child) {
-      border-top: 1px solid #637383;
-    }
-  }
+<style scoped>
+.popup-header { display: flex; align-items: center; gap: 12px; }
+.popup-header .form-select-trigger { max-width: 260px; }
+.popup-header input { max-width: 400px; margin: 0; }
+.links { margin: 24px 0; max-height: calc(100% - 165px); overflow-y: auto; }
+.link {
+   display: flex;
+   align-items: center;
+   gap: 8px;
+   color: inherit;
+   text-align: left;
+   padding: 4px;
+   cursor: pointer;
 }
+.link.selected { background: #dedede; }
+.link + .link { border-top: 1px solid #637383; }
+.link input[type="radio"] { appearance: auto; opacity: 1; position: static; pointer-events: auto; }
 </style>

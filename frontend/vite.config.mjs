@@ -1,16 +1,12 @@
 import vue from '@vitejs/plugin-vue'
 import { defineConfig, loadEnv } from 'vite'
 
-// Existing styles and editor code select the lowercase component roots.
-const legacyElements = new Set(['e404', 'login', 'userprofile'])
 const backendPaths = String.raw`^/(?:[^?]+\.(?:json|xml)|[^/?]+/(?:upload\.html|subget/?|links/(?:add|delete/[^/?]+|from|to))|docs/intro|[a-zA-Z0-9_-]+(?:/(?:[0-9]+|edit(?:/[^/?]+)?))?|version\.txt)(?:\?|$)`
 
 export default defineConfig(({ command, mode }) => {
    const config = {
       base: command === 'build' ? './' : '/',
-      plugins: [vue({
-         template: { compilerOptions: { isCustomElement: tag => tag.includes('-') || legacyElements.has(tag) } }
-      })],
+      plugins: [vue()],
       build: { assetsInlineLimit: 512 }
    }
    if (command === 'build') return config

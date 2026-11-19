@@ -1,5 +1,4 @@
 <template>
-<dict-nav>
    <nav class="nav-breadcrumbs" aria-label="Breadcrumb">
       <div class="nav-wrapper">
          <RouterLink :to="{ name: session ? 'home' : 'public-list' }"
@@ -13,7 +12,6 @@
          </template>
       </div>
    </nav>
-</dict-nav>
 </template>
 
 <script setup lang="ts">

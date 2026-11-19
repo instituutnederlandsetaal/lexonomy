@@ -1,58 +1,46 @@
 <template>
   <div>
     <section class="media-input" v-if="elementData.shown && !readOnly">
-      <label v-if="isAttribute" class="text--md" :for="computedElementName">{{ computedElementNameWithColon }}</label>
-      <input :name="computedElementName" type="text" v-model="value"
-             @change="updateParent">
+      <label v-if="isAttribute" class="text--md" :for="inputId">{{ label }}</label>
+      <input :id="inputId" :name="fieldName" type="text" :value="value" aria-label="Media URL"
+             @input="updateParent" @compositionend="updateParent">
     </section>
 
     <section v-if="elementData.shown && readOnly" class="read-only">
-      <p v-if="showPreview" :class="computedClass">{{ computedElementNameWithColon }} </p>
-      <span :class="computedClass">{{ value }}</span>
+      <p v-if="showPreview" :class="textClass">{{ label }} </p>
+      <span :class="textClass">{{ value }}</span>
     </section>
   </div>
 </template>
 
-<script>
-import computedElementName from "../../shared-resources/mixins/computedElementName.js"
-import showPreview from "../../shared-resources/mixins/showPreview.js"
+<script setup lang="ts">
+import { computed, useId } from 'vue'
+import type { Element } from 'xml-js'
+import type { ElementDisplay } from '../../editor-schema.ts'
+import type { ValueUpdate } from '../../use-editor-field.ts'
 
-export default {
-  name: "MediaComponent",
-  emits: ['input'],
-  props: {
-    elementData: Object,
-    elementName: String,
-    content: {
-      type: Object,
-      required: true
-    }
-  },
-  mixins: [computedElementName, showPreview],
-  data() {
-    return {
-      value: ""
-    }
-  },
-  mounted() {
-    this.value = this.content.text
-  },
-  methods: {
-    updateParent() {
-      this.$nextTick(() => {
-        if (this.value === this.content.text) {
-          return
-        }
-        if (this.content.type === "attribute") {
-          this.$emit('input', {elementName: this.elementName, attributes: {[this.content.name]: this.value}})
-        } else {
-          let elements = Object.assign({}, this.content)
-          elements.text = this.value
-          this.$emit('input', {elementName: this.elementName, elements: [elements]})
-        }
-      })
-    }
-  }
+const props = defineProps<{
+   elementData: ElementDisplay
+   elementName: string
+   content: Element
+   isAttribute?: boolean
+   showPreview?: boolean
+}>()
+const emit = defineEmits<{ input: [change: ValueUpdate] }>()
+const inputId = useId()
+const fieldName = computed(() => props.elementData.hideElementName ? '' : props.elementData.editorLabel)
+const label = computed(() => fieldName.value ? fieldName.value + ':' : '')
+const readOnly = computed(() => props.elementData.readOnly || props.showPreview)
+const textClass = computed(() => props.showPreview ? 'text--xs' : 'text--md')
+const value = computed(() => String(props.content.text ?? ''))
+
+function updateParent(event: Event) {
+   if ((event instanceof InputEvent && event.isComposing) || !(event.target instanceof HTMLInputElement)) return
+   const { value: text } = event.target
+   if (text === value.value) return
+   const { content, elementName } = props
+   if (props.isAttribute) emit('input', { attributes: { [content.name ?? elementName]: text } })
+   else emit('input', { elements: [{ ...content, text }] })
 }
 </script>
 

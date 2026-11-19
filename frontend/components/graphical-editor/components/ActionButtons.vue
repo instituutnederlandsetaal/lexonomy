@@ -1,197 +1,101 @@
 <template>
-  <div v-if="!isRootElement" ref="actionButton" class="dropdown">
-    <button class="button--sm secondary" @click.prevent.stop="toggleDropdown" :disabled="disable || numberOfActions === 0">
-      {{ buttonText }}
-    </button>
-    <div v-show="show" class="vue-dropdown-content">
-      <button v-if="canMoveElementUp"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('move-element-up')">
-        Move {{ computedElementName }} <img :src="arrowUp" alt="">
-      </button>
-      <button v-if="canMoveElementDown"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('move-element-down')">
-        Move {{ computedElementName }} <img :src="arrowDown" alt="">
-      </button>
-      <div v-if="canMoveElementDown || canMoveElementUp" class="break"></div>
-      <button v-if="canAddElement && !subentryElement"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('add-element')">
-        Create new {{ computedElementName }}
-      </button>
-      <button v-if="canAddElement && elementEditorConfig.enableCopying"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('clone-element')">
-        Duplicate {{ computedElementName }}
-      </button>
-      <button v-if="canAddElement && subentryElement"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('link-element')">
-        Add new {{ computedElementName }} subentry
-      </button>
-      <button v-if="elementEditorConfig.enableParentChange"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('select-new-parent')">
-        Change parent of {{ computedElementName }}
-      </button>
-      <button v-if="canAddLink"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('add-link')">
-        Link to another element
-      </button>
-      <div v-if="canAddElement && canRemoveElement" class="break"></div>
-      <button v-if="canRemoveElement"
-              class="tertiary"
-              @click.prevent.stop="triggerEvent('remove-element')">
-        Remove selected {{ computedElementName }}
-      </button>
-    </div>
-  </div>
+   <DropdownMenuRoot v-if="!isRootElement" :modal="false">
+      <DropdownMenuTrigger type="button" class="button--sm secondary" :disabled="editorLocked || disable || !hasAction"
+                           @click.stop>
+         {{ buttonText }}
+      </DropdownMenuTrigger>
+      <DropdownMenuPortal>
+         <DropdownMenuContent class="graphical-action-menu" :inert="editorLocked" align="start" :side-offset="4" :collision-padding="8">
+            <DropdownMenuItem v-if="canMoveUp" @select="emit('move-element-up')">
+               Move {{ displayName }} <img :src="arrowUp" alt="up">
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="canMoveDown" @select="emit('move-element-down')">
+               Move {{ displayName }} <img :src="arrowDown" alt="down">
+            </DropdownMenuItem>
+            <DropdownMenuSeparator v-if="canMoveUp || canMoveDown" class="break"/>
+            <DropdownMenuItem v-if="canAdd && !subentryElement" @select="emit('add-element')">
+               Create new {{ displayName }}
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="canAdd && elementEditorConfig.enableCopying && numberOfElements > 0" @select="emit('clone-element')">
+               Duplicate {{ displayName }}
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="canAdd && subentryElement" @select="emit('link-element')">
+               Add new {{ displayName }} subentry
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="canChangeParent" @select="emit('select-new-parent')">
+               Change parent of {{ displayName }}
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="canAddLink" @select="emit('add-link')">Link to another element</DropdownMenuItem>
+            <DropdownMenuSeparator v-if="canAdd && canRemove" class="break"/>
+            <DropdownMenuItem v-if="canRemove" @select="emit('remove-element')">Remove selected {{ displayName }}</DropdownMenuItem>
+         </DropdownMenuContent>
+      </DropdownMenuPortal>
+   </DropdownMenuRoot>
 </template>
 
-<script>
-import computedElementName from "../shared-resources/mixins/computedElementName.js"
+<script setup lang="ts">
+import { editorLockedKey, editorContextKey } from '../editor-context.ts'
+import { computed, inject } from 'vue'
+import { DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuRoot, DropdownMenuSeparator, DropdownMenuTrigger } from 'reka-ui'
+import { maximumChildCount, xmlElementName } from '../../../js/xema.ts'
+import type { ElementDisplay } from '../editor-schema.ts'
 import arrowUp from '../../../assets/img/svg/arrow-up.svg'
 import arrowDown from '../../../assets/img/svg/arrow-down.svg'
 
-export default {
-  inject: ['editorState'],
-  name: "ActionButtons",
-  emits: ['move-element-down', 'move-element-up', 'add-element', 'select-new-parent', 'add-link', 'clone-element', 'remove-element', 'link-element'],
-  props: {
-    elementName: String,
-    elementEditorConfig: Object,
-    parentElementName: String,
-    numberOfElements: Number,
-    editorChildNumber: Number,
-    subentryElement: Boolean,
-    disable: {
-      type: Boolean,
-      default: false
-    }
-  },
-  mixins: [computedElementName],
-  data() {
-    return {
-      show: false,
-      arrowUp,
-      arrowDown
-    }
-  },
-  computed: {
-    isRootElement() {
-      return this.elementName === this.editorState.entry.dictConfigs.xema.root
-    },
-    buttonText() {
-      const xemplate = this.editorState.entry.dictConfigs.xemplate
-      if (!xemplate || !xemplate[this.elementName]) {
-        return this.computedElementName
-      }
-      switch(xemplate[this.elementName].gutter) {
-        case "sensenum0":
-        case "sensenum1":
-        case "sensenum2":
-        case "sensenum3":
-          return (this.editorChildNumber+1) + ". " + this.computedElementName
-        default:
-          return this.computedElementName
-      }
-    },
-    numberOfActions() {
-      return [this.canAddElement, this.canRemoveElement, this.canMoveElementUp, this.canMoveElementDown, Boolean(this.canAddLink)].filter(bool => bool === true).length
-    },
-    canAddElement() {
-      const xemaElements = this.editorState.entry.dictConfigs.xema.elements
-      let parentChildren = (xemaElements && xemaElements[this.parentElementName] && xemaElements[this.parentElementName].children) || []
-      let childElement = parentChildren.find(el => el.name === this.elementName)
-      return childElement && (!Number(childElement.max) || this.numberOfElements < Number(childElement.max))
-    },
-    canRemoveElement() {
-      const xemaElements = this.editorState.entry.dictConfigs.xema.elements
-      let parentChildren = (xemaElements && xemaElements[this.parentElementName] && xemaElements[this.parentElementName].children) || []
-      let childElement = parentChildren.find(el => el.name === this.elementName)
-      return childElement && (!Number(childElement.min) || this.numberOfElements > Number(childElement.min))
-    },
-    canAddLink() {
-      return this.editorState.entry.dictConfigs.linking[this.elementName]
-    },
-    canMoveElementDown() {
-      return this.elementEditorConfig.enablePositionChange && this.editorChildNumber < this.numberOfElements - 1
-    },
-    canMoveElementUp() {
-      return this.elementEditorConfig.enablePositionChange && this.editorChildNumber > 0
-    }
-  },
-  watch: {
-    show(show) {
-      if (show) {
-        window.addEventListener("click", this.watchForOutsideClick)
-      } else {
-        window.removeEventListener("click", this.watchForOutsideClick)
-      }
-    }
-  },
-  beforeUnmount() {
-    window.removeEventListener("click", this.watchForOutsideClick)
-  },
-  methods: {
-    triggerEvent(event) {
-      this.toggleDropdown()
-      this.$nextTick(() => {
-        this.$emit(event)
-      })
-    },
-    toggleDropdown() {
-      this.show = !this.show
-    },
-    watchForOutsideClick(event) {
-      if (this.$refs.actionButton && !this.$refs.actionButton.contains(event.target)) {
-        this.toggleDropdown()
-      }
-    }
-  }
-}
+const props = defineProps<{
+   elementName: string
+   elementEditorConfig: ElementDisplay
+   parentElementName?: string
+   numberOfElements: number
+   editorChildNumber: number
+   linkSourceId?: string | number
+   subentryElement?: boolean
+   disable?: boolean
+}>()
+const emit = defineEmits<{
+   'move-element-down': []; 'move-element-up': []; 'add-element': []; 'select-new-parent': [];
+   'add-link': []; 'clone-element': []; 'remove-element': []; 'link-element': []
+}>()
+const editor = inject(editorContextKey)!
+const editorLocked = inject(editorLockedKey)!
+const xema = computed(() => editor.config.xema)
+const isRootElement = computed(() => !props.parentElementName)
+const displayName = computed(() => xmlElementName(xema.value, props.elementName))
+const buttonText = computed(() => {
+   if (/^sensenum[0-3]$/.test(props.elementEditorConfig.gutter ?? '')) {
+      return `${props.editorChildNumber + 1}. ${displayName.value}`
+   }
+   return displayName.value
+})
+const rule = computed(() => props.parentElementName
+   ? xema.value.elements[props.parentElementName]?.children?.find(child => child.name === props.elementName)
+   : undefined)
+const canAdd = computed(() => Boolean(rule.value && props.numberOfElements < maximumChildCount(rule.value.max)))
+const canRemove = computed(() => Boolean(rule.value && props.numberOfElements > (Number(rule.value.min) || 0)))
+const canMoveUp = computed(() => Boolean(props.elementEditorConfig.enablePositionChange && props.editorChildNumber > 0))
+const canMoveDown = computed(() => Boolean(props.elementEditorConfig.enablePositionChange && props.editorChildNumber < props.numberOfElements - 1))
+const canChangeParent = computed(() => Boolean(props.elementEditorConfig.enableParentChange && canRemove.value))
+const canAddLink = computed(() => Boolean(props.linkSourceId && editor.config.linking[props.elementName]))
+const hasAction = computed(() => canAdd.value || canRemove.value || canMoveUp.value || canMoveDown.value || canAddLink.value || canChangeParent.value)
 </script>
 
-<style lang="scss" scoped>
-.dropdown {
-  position: relative;
-  display: flex;
-  align-items: center;
-
-  img {
-    filter: invert(56%) sepia(100%) saturate(7500%) hue-rotate(203deg) brightness(90%) contrast(101%);
-  }
+<style>
+.graphical-action-menu {
+   width: max-content;
+   min-width: 160px;
+   background: #fff;
+   color: #2c3e50;
+   border: 1px solid #d9eaff;
+   border-radius: 4px;
+   box-shadow: 0 8px 16px #0003;
+   z-index: 1100;
 }
-
-.vue-dropdown-content {
-  display: block;
-  position: absolute;
-  width: max-content;
-  top: calc(50% + 20px);
-  background-color: #fff;
-  border: 1px solid #D9EAFF;
-  border-radius: 4px;
-  min-width: 160px;
-  overflow: auto;
-  box-shadow: 0 8px 16px 0 rgba(0, 0, 0, 0.2);
-  z-index: 2;
-
-  .break {
-    border-bottom: 1px solid #D9EAFF;
-  }
-
-  button {
-    display: block;
-    //padding: 12px 16px;
-    //color: black;
-    //text-decoration: none;
-    cursor: pointer;
-
-    //&:hover {
-    //  background-color: #ddd;
-    //}
-  }
+.graphical-action-menu [role="menuitem"] {
+   padding: 6px 12px;
+   cursor: pointer;
+   outline: none;
 }
+.graphical-action-menu [data-highlighted] { background: #d9eaff; }
+.graphical-action-menu img { width: 1em; height: 1em; }
+.graphical-action-menu .break { border-bottom: 1px solid #d9eaff; }
 </style>

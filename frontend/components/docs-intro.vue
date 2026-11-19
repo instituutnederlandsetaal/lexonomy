@@ -1,5 +1,5 @@
 <template>
-<docs-intro>
+<div class="docs-intro">
    <div>
       <h1>Gentle introduction to Lexonomy</h1>
       <p><em>Lexonomy</em> is a free tool for writing and publishing
@@ -57,7 +57,7 @@
       <p>Notice how Lexonomy always only offers you choices that "make sense": it lets you add new examples inside senses but not inside other elements, and so on. This is because, again, Lexonomy knows what an entry is supposed to be structured like and makes sure the structure is always adhered to. This may sound limiting but it isn't, it promotes consistency: all your entries will be guaranteed to have the same structure. And besides, you can decide yourself what the structure is supposed to be. That's what we will get to next, so keep on reading.</p>
 
       <h2>Configuring your dictionary</h2>
-      <p>Click the <em>Configure</em> link and Lexonomy will take you to its configuration interface. This is where you can set up various things that affect the entire dictionary, i.e. <strong>Dictionary settings</strong>, <strong>Entry settings</strong>, <strong>Publishing</strong>, <strong>External data sources</strong>.</p>
+      <p>Click the <em>Configure</em> link and Lexonomy will take you to its configuration interface. This is where you can set up various things that affect the entire dictionary, i.e. <strong>Dictionary settings</strong>, <strong>Entry settings</strong> and <strong>Publishing</strong>.</p>
       <p><img alt="Screenshot" loading="lazy" src="/docs/03-01.png" width="90%"/></p>
 
       <h3>Dictionary settings</h3>
@@ -135,5 +135,5 @@
    </div>
 
 
-</docs-intro>
+</div>
 </template>

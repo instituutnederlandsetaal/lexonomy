@@ -1,5 +1,5 @@
 <template>
-<dict-edit-entry>
+<div class="dict-edit-entry">
    <div class="row editorContainer">
       <div class="xonomy-envelope">
          <div id="toolbar" class="buttons">
@@ -9,7 +9,7 @@
             <span v-if="canEdit" class="divider"></span>
             <label for="idbox">ID</label>
             <input id="idbox" v-model="idInput" type="text" inputmode="numeric"
-                   @keydown.stop @keyup.esc="idInput = entry?.id ?? ''" @keyup.enter="openById">
+                   @keydown.stop @keyup.esc="idInput = entry?.id ? String(entry.id) : ''" @keyup.enter="openById">
             <button id="butOpen" class="btn btn-secondary" aria-label="Open entry" @click="openById">
                <i class="material-icons">send</i>
             </button>
@@ -42,47 +42,50 @@
                     title="Source code" :disabled="mutating" @click="toggleSource">
                <i class="material-icons">code</i>
             </button>
-            <button v-if="idInput && !reading" id="butHistory" class="btn btn-secondary right"
+            <button v-if="canEdit && historyId && !reading" id="butHistory" class="btn btn-secondary right"
                     :class="{ 'btn-flat': surface !== 'history' }" title="History"
                     :disabled="mutating" @click="toggleHistory">
                <i class="material-icons">history</i>
             </button>
          </div>
-         <div id="container" :class="{
+         <div ref="container" id="container" :class="{
             empty: !editorEntry && !viewerEntry && surface !== 'source',
             withHistory: surface === 'history',
             withSourceCode: surface === 'source'
          }" :inert="mutating">
             <div v-if="editorEntry" :key="revision" :id="graphical ? 'editor' : undefined">
                <GraphicalEditor v-if="graphical" ref="graphicalEditor"
-                  :entry="graphicalEntry" @dirty-change="markDirty" @links-changed="refreshLinks"/>
-               <LegacyEditor v-else ref="legacyEditor" :entry="editorEntry" :config="config"
+                  :xml="entry?.content || initialXml" :config="config" :dict-id="dictId" :user-dicts="userDicts"
+                  @dirty-change="markDirty" @links-changed="refreshLinks"/>
+               <LegacyEditor v-else-if="dictId" ref="legacyEditor" :entry="editorEntry" :config="config" :dict-id="dictId" :user-dicts="userDicts"
                   :readonly="!isEditing || !canEdit"
                   :initial-xml="editorEntry.content || initialXml"
                   @use-graphical="useGraphical = true" @dirty-change="markDirty"
-                  @links-changed="refreshLinks" @status="showStatus"/>
-               <EntryLinks v-if="isEditing && entry?.id" ref="entryLinks" :entry-id="entry.id"
-                           :dict-id="activeDictionary.dictId" :can-delete="canEdit"/>
+                  @links-changed="refreshLinks" @status="showStatus" @open-entry="openRelatedEntry"/>
+               <EntryLinks v-if="isEditing && entry?.id && dictId" ref="entryLinks" :entry-id="entry.id"
+                           :dict-id="dictId" :can-delete="canEdit"/>
             </div>
             <div v-else-if="viewerEntry" id="viewer" class="viewer" :key="revision" @click="followHeadword">
                <RawHtml :content="viewerHtml"/>
-               <EntryLinks v-if="surface === 'view'" :entry-id="viewerEntry.id" :dict-id="activeDictionary.dictId"/>
+               <EntryLinks v-if="surface === 'view' && entry?.id && dictId" :entry-id="entry.id" :dict-id="dictId"/>
             </div>
             <div v-else-if="surface === 'source'" id="sourceCode">
-               <textarea ref="source" :value="source" aria-label="Entry XML" spellcheck="false"
-                         @keydown.stop @input="markDirty($event.target.value !== sourceInputValue)"></textarea>
+               <textarea ref="sourceInput" :value="source" aria-label="Entry XML" spellcheck="false"
+                         @keydown.stop @input="markDirty(($event.target as HTMLTextAreaElement).value !== sourceInputValue)"></textarea>
             </div>
          </div>
          <div v-if="surface === 'history'" id="history">
             <template v-for="(item, index) in revisions" :key="item.revision_id">
                <div v-if="item.action !== 'delete' && item.action !== 'purge'" class="revision"
                     :class="{ current: selectedRevision === item, pretty: selectedRevision === item && previewHistory }"
-                    @click="selectRevision(item)">
-                  <span v-if="hasViewer" class="pretty" role="button" tabindex="0" aria-label="Show formatted revision"
-                        @click.stop="selectRevision(item, true)" @keydown.enter.stop="selectRevision(item, true)"></span>
-                  <span v-if="index && canEdit" class="revive" role="button" tabindex="0"
-                        @click.stop="reviveRevision(item)" @keydown.enter.stop="reviveRevision(item)">Revive</span>
-                  <span class="label">Version {{ revisions.length - index }}</span>
+>
+                  <button v-if="hasViewer" type="button" class="pretty" aria-label="Show formatted revision"
+                          @click="selectRevision(item, true)"></button>
+                  <button v-if="index && canEdit" type="button" class="revive"
+                          @click="reviveRevision(item)">Revive</button>
+                  <button type="button" class="label" @click="selectRevision(item)">
+                     Version {{ revisions.length - index }}
+                  </button>
                </div>
                <div class="interRevision">
                   <div class="arrowTop"></div><div class="arrowMiddle"></div><div class="arrowBottom"></div>
@@ -105,9 +108,9 @@
          <div id="statusbar" role="status">
             <div v-show="alert" class="alertmessage yellow">
                <span class="text">{{ alert }}</span>
-               <span class="right clickable closeIcon">
-                  <i class="material-symbols-outlined" @click="alert = ''">close</i>
-               </span>
+               <button type="button" class="right clickable closeIcon" aria-label="Dismiss alert" @click="alert = ''">
+                  <i class="material-symbols-outlined" aria-hidden="true">close</i>
+               </button>
             </div>
             <span class="statusmessage">
                <span v-if="statusStyle" :class="statusStyle"></span>{{ status }}
@@ -116,335 +119,418 @@
       </div>
       <div id="editorStyle"><component :is="'style'" v-if="editing._css">{{ editing._css }}</component></div>
    </div>
-</dict-edit-entry>
+</div>
 </template>
 
-<script>
-import { defineAsyncComponent } from 'vue'
-import { api } from '../js/api.ts'
-import { activeDictionary, dictionaryWorkspace } from '../js/dictionary-workspace.ts'
-import { myDictionaries } from '../js/my-dictionaries.ts'
-import { searchEntriesFromRoute } from '../js/entry-search.ts'
-import { isNavigationFailure, NavigationFailureType } from 'vue-router'
-import { parseXml } from '../js/xml.js'
+<script setup lang="ts">
+import { editorLockedKey } from './graphical-editor/editor-context.ts'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, provide, readonly, ref, watch } from 'vue'
+import { isNavigationFailure, NavigationFailureType, useRoute, useRouter } from 'vue-router'
+import { entryEditorApi, type EntryDraft, type EntryRevision } from '../js/entry-editor-api.ts'
+import { dictionaryWorkspace, type WorkspaceConfig } from '../js/dictionary-workspace.ts'
+import type { MyDictionary } from '../js/my-dictionaries.ts'
+import { crossReferenceHref, searchEntriesFromRoute } from '../js/entry-search.ts'
+import { parseXml } from '../js/xml.ts'
 import { initialDocument, parseDTD } from '../libs/xonomy-tools/dtdconvert/dtd2xonomy.js'
-import { Xematron } from '../widgets/xematron.js'
-import { entryHtml } from '../widgets/xemplatron.js'
+import { createInitialXml } from '../widgets/xematron.ts'
+import { entryHtml } from '../widgets/xemplatron.ts'
 import EntryLinks from './entry-editor/EntryLinks.vue'
 import { confirmEntryNavigation, unsavedEntry } from './entry-editor/unsaved.js'
 import GraphicalEditor from './graphical-editor/GraphicalEditor.vue'
+import { xemaElementId, xmlElementName } from '../js/xema.ts'
+import { readFormattingFields } from '../js/xemplate.ts'
 import RawHtml from './raw-html.vue'
 import './entry-editor/editor.css'
 
-const LegacyEditor = defineAsyncComponent(() => import('./entry-editor/LegacyEditor.vue'))
-const revisionAction = { create: 'Created', update: 'Changed', delete: 'Deleted', purge: 'Bulk-deleted' }
+type EntryMode = 'edit' | 'view'
+type Surface = EntryMode | 'empty' | 'source' | 'history'
 
-export default {
-   components: { EntryLinks, GraphicalEditor, LegacyEditor, RawHtml },
-   props: { dictionaryConfig: { type: Object, required: true } },
-   data() {
-      return {
-         activeDictionary, revisionAction,
-         entry: null, idInput: '', surface: 'empty', requestedKey: null,
-         revision: 0, revisions: [], selectedRevision: null, previewHistory: false,
-         status: 'Ready.', statusStyle: '', alert: '', reading: false, mutating: false,
-         useGraphical: false, baseDirty: false, source: '', invalidSource: false,
-      }
-   },
-   computed: {
-      requestedEntry() {
-         return [activeDictionary.entryId, activeDictionary.mode, activeDictionary.doctype]
-      },
-      dictPath() {
-         return encodeURIComponent(activeDictionary.dictId)
-      },
-      editing() {
-         return this.config.editing
-      },
-      config() {
-         const config = this.dictionaryConfig
-         return { ...config, xema: { ...config.xema, root: activeDictionary.doctype || config.xema.root } }
-      },
-      canEdit() {
-         return activeDictionary.userAccess?.canEdit
-      },
-      sourceInputValue() {
-         return this.source.replace(/\r\n?/g, '\n')
-      },
-      isEditing() {
-         return this.surface === 'edit'
-      },
-      dirty() {
-         return unsavedEntry.value
-      },
-      hasViewer() {
-         const { xema, xemplate } = this.config
-         return Boolean(xemplate._xsl || xemplate._css ||
-            (xemplate[xema.root]?.shown && xemplate[xema.root].shown !== 'false'))
-      },
-      initialXml() {
-         const { xema } = this.config
-         if (xema._xonomyDocSpec && xema._newXml) return xema._newXml
-         return (xema._dtd && initialDocument(parseDTD(xema._dtd))) || Xematron.xema2xml(xema)
-      },
-      graphical() {
-         return this.isEditing && this.canEdit && this.editing.xonomyMode === 'graphical'
-            && (!this.editing._js || this.useGraphical)
-      },
-      editorEntry() {
-         if (this.surface === 'history') return this.previewHistory ? null : this.selectedRevision
-         return this.isEditing ? this.entry ?? { id: 0 } : null
-      },
-      graphicalEntry() {
-         return {
-            id: this.entry?.id, xml: this.entry?.content || this.initialXml,
-            doctype: this.entry?.doctype || activeDictionary.doctype,
-            dictId: activeDictionary.dictId, dictConfigs: this.config, userDicts: myDictionaries.items
-         }
-      },
-      viewerEntry() {
-         if (this.surface === 'history') return this.previewHistory ? this.selectedRevision : null
-         return this.surface === 'view' ? this.entry : null
-      },
-      viewerHtml() {
-         return this.viewerEntry ? entryHtml(this.viewerEntry, this.config) : ''
-      }
-   },
-   watch: {
-      requestedEntry([id, mode]) {
-         this.showRequestedEntry(id, mode)
-      },
-      viewerHtml: { flush: 'post', handler: 'showLinkTarget' },
-      '$route.query.link': { flush: 'post', handler: 'showLinkTarget' }
-   },
-   mounted() {
-      this.showRequestedEntry(activeDictionary.entryId, activeDictionary.mode)
-   },
-   beforeUnmount() {
-      this.revision++
-      unsavedEntry.value = false
-   },
-   methods: {
-      showLinkTarget() {
-         if (this.surface !== 'view') return
-         const target = this.$route.query.link
-         for (const link of this.$el.querySelectorAll('#viewer .linkable[name]')) {
-            const name = link.getAttribute('name')
-            link.style.display = name === target ? 'inline' : ''
-            if (name === target) link.scrollIntoView()
-         }
-      },
-      showStatus(text = 'Ready.', style = '') {
-         this.status = text
-         this.statusStyle = style
-      },
-      markDirty(dirty = true) {
-         unsavedEntry.value = this.baseDirty || dirty
-      },
-      show(entry, surface, dirty = false) {
-         this.revision++
-         this.entry = entry
-         this.surface = surface
-         this.baseDirty = dirty
-         this.reading = false
-         this.mutating = false
-         this.useGraphical = false
-         this.invalidSource = false
-         this.markDirty(dirty)
-      },
-      async leaveEntry(surface) {
-         if (this.mutating) return
-         const failure = await this.$router.push(this.entryRoute())
-         if (failure && !(isNavigationFailure(failure, NavigationFailureType.duplicated) && confirmEntryNavigation())) return
-         this.show(null, surface)
-         this.idInput = ''
-         this.showStatus()
-      },
-      entryKey(id, mode) {
-         return `${activeDictionary.doctype}/${id || ''}/${mode || 'view'}`
-      },
-      entryRoute(entryId, mode) {
-         const { dictId, doctype } = activeDictionary
-         return { name: 'edit', params: { dictId, doctype, entryId: entryId || '', mode: mode || '' },
-            query: this.$route.query }
-      },
-      showRequestedEntry(id, mode) {
-         const key = this.entryKey(id, mode)
-         if (this.requestedKey === key) return
-         this.requestedKey = key
-         if (id) this.loadEntry(id, mode)
-         else {
-            this.show(null, 'empty')
-            this.idInput = ''
-            this.showStatus()
-         }
-      },
-      openById() {
-         const id = this.idInput.toString().trim()
-         if (!id) {
-            this.leaveEntry('empty')
-         } else if (/^\d+$/.test(id) && Number.isSafeInteger(Number(id)) && Number(id) > 0) {
-            this.openEntry(Number(id), this.entry?.id && this.isEditing ? 'edit' : 'view')
-         } else {
-            this.showStatus('No such item.', 'warn')
-         }
-      },
-      async openEntry(id, mode) {
-         const failure = await this.$router.push(this.entryRoute(id, mode))
-         if (isNavigationFailure(failure, NavigationFailureType.duplicated) && confirmEntryNavigation()) {
-            this.loadEntry(id, mode)
-         }
-      },
-      async loadEntry(id, mode) {
-         const surface = !this.hasViewer || mode === 'edit' && this.canEdit ? 'edit' : 'view'
-         this.show(null, 'empty')
-         this.idInput = id
-         this.reading = true
-         this.showStatus('Getting item...', 'wait')
-         const revision = this.revision
-         const entry = await api.post(`${this.dictPath}/entryread.json`, { id }).catch(() => null)
-         if (revision !== this.revision) return
-         this.reading = false
-         if (!entry?.success) {
-            this.showStatus('No such item.', 'warn')
-            return
-         }
-         this.show(entry, surface)
-         this.showStatus()
-      },
-      toggleEditing() {
-         if (this.mutating) return
-         if (this.surface === 'view' && this.canEdit) this.openEntry(this.entry.id, 'edit')
-         else if (this.isEditing && this.entry?.id && this.hasViewer) this.openEntry(this.entry.id, 'view')
-         else if (this.isEditing && !this.entry?.id) this.leaveEntry('empty')
-      },
-      async harvest() {
-         try {
-            return await (this.$refs.graphicalEditor || this.$refs.legacyEditor)?.harvest()
-         } catch {
-            this.showStatus('Failed to read editor content.', 'warn')
-         }
-      },
-      async save() {
-         if (!this.isEditing || !this.canEdit || this.mutating) return
-         const revision = this.revision
-         const content = await this.harvest()
-         if (content && revision === this.revision) await this.persist(content, this.entry?.id)
-      },
-      async clone() {
-         if (this.mutating || !this.entry?.id) return
-         if (!confirmEntryNavigation()) return
-         const revision = this.revision
-         const content = this.isEditing ? await this.harvest() : this.entry.content
-         if (content && revision === this.revision) await this.persist(content)
-      },
-      async persist(content, id) {
-         if (this.mutating) return
-         this.mutating = true
-         this.showStatus('Saving...', 'wait')
-         const revision = this.revision
-         const action = id ? 'entryupdate' : 'entrycreate'
-         const result = await api.post(`${this.dictPath}/${action}.json`, { id, content }).catch(() => null)
-         if (revision !== this.revision) return
-         this.mutating = false
-         if (!result?.success) {
-            this.showStatus('Failed to save.', 'warn')
-            return
-         }
-         const surface = this.hasViewer ? 'view' : 'edit'
-         this.show(result, surface)
-         this.idInput = result.id
-         this.requestedKey = this.entryKey(result.id, surface)
-         this.$router.push(this.entryRoute(result.id, surface))
-         this.showStatus()
-         if (result.feedback?.type === 'saveFeedbackHeadwordExists') {
-            this.alert = `WARNING: another entry with this headword exists. ID=${result.feedback.info}`
-         } else if (result.feedback) {
-            this.alert = result.feedback.type || JSON.stringify(result.feedback)
-         }
-         dictionaryWorkspace.loadEntryList()
-      },
-      async remove() {
-         if (this.mutating || !window.confirm('Careful now! Are you sure?')) return
-         const { id } = this.entry
-         const revision = this.revision
-         this.mutating = true
-         this.showStatus('Deleting...', 'wait')
-         const result = await api.post(`${this.dictPath}/entrydelete.json`, { id }).catch(() => null)
-         if (revision !== this.revision) return
-         this.mutating = false
-         if (!result?.success) {
-            this.showStatus('Failed to delete.', 'warn')
-            return
-         }
-         this.show(null, 'empty')
-         this.showStatus()
-         dictionaryWorkspace.loadEntryList()
-      },
-      refreshLinks() {
-         this.$refs.entryLinks?.load()
-      },
-      async toggleSource() {
-         if (this.surface === 'source') {
-            const source = this.$refs.source.value
-            const changed = source !== this.sourceInputValue
-            const content = changed ? source : this.source
-            if (!parseXml(content)) {
-               this.invalidSource = true
-               return
-            }
-            this.show({ ...this.entry, content }, 'edit', this.baseDirty || changed)
-            return
-         }
-         const revision = this.revision
-         const content = await this.harvest()
-         if (content == null || revision !== this.revision) return
-         this.source = content
-         this.show(this.entry, 'source', this.dirty)
-         this.$nextTick(() => this.$refs.source?.focus())
-      },
-      async toggleHistory() {
-         const id = this.entry?.id || activeDictionary.entryId || this.idInput
-         if (!id || !confirmEntryNavigation()) return
-         if (this.surface === 'history') {
-            this.openEntry(id, 'view')
-            return
-         }
-         this.revisions = []
-         this.selectedRevision = null
-         this.show(this.entry, 'history')
-         this.showStatus('Getting history...', 'wait')
-         const revision = this.revision
-         const data = await api.post(`${this.dictPath}/history.json`, { id }).catch(() => null)
-         if (revision !== this.revision) return
-         this.showStatus(data ? 'Ready.' : 'Failed to get history.', data ? '' : 'warn')
-         this.revisions = data?.history || []
-         const latest = this.revisions[0]
-         if (latest && !['delete', 'purge'].includes(latest.action)) this.selectRevision(latest)
-      },
-      selectRevision(item, pretty = false) {
-         this.selectedRevision = item
-         this.previewHistory = pretty
-         this.revision++
-      },
-      async reviveRevision(item) {
-         const id = item.entry_id
-         this.requestedKey = this.entryKey(id, 'edit')
-         const failure = await this.$router.push(this.entryRoute(id, 'edit'))
-         if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) return
-         this.idInput = id
-         this.show({ ...item, id }, 'edit', true)
-      },
-      async followHeadword(event) {
-         const link = event.target.closest('a.xref[data-text]')
-         if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
-         event.preventDefault()
-         const revision = this.revision
-         const results = await searchEntriesFromRoute({ searchtext: link.dataset.text, modifier: 'substring' })
-         if (revision !== this.revision) return
-         const match = results?.[0]
-         if (match) this.openEntry(match.id, 'view')
-      }
+const props = defineProps<{
+   dictionaryConfig: WorkspaceConfig
+   dictId: string
+   doctype: string | null
+   entryId: number | null
+   mode: EntryMode
+   canEdit: boolean
+   userDicts: readonly MyDictionary[]
+}>()
+const LegacyEditor = defineAsyncComponent(() => import('./entry-editor/LegacyEditor.vue'))
+const revisionAction = { create: 'Created', update: 'Changed', delete: 'Deleted', purge: 'Bulk-deleted', autonumber: 'Auto-numbered' }
+const route = useRoute()
+const router = useRouter()
+
+const container = ref<HTMLElement | null>(null)
+const sourceInput = ref<HTMLTextAreaElement | null>(null)
+const legacyEditor = ref<InstanceType<typeof LegacyEditor> | null>(null)
+const graphicalEditor = ref<InstanceType<typeof GraphicalEditor> | null>(null)
+const entryLinks = ref<InstanceType<typeof EntryLinks> | null>(null)
+const entry = ref<EntryDraft | null>(null)
+const idInput = ref('')
+const surface = ref<Surface>('empty')
+const revisions = ref<EntryRevision[]>([])
+const selectedRevision = ref<EntryRevision | null>(null)
+const previewHistory = ref(false)
+const status = ref('Ready.')
+const statusStyle = ref('')
+const alert = ref('')
+const reading = ref(false)
+const mutating = ref(false)
+provide(editorLockedKey, readonly(mutating))
+const useGraphical = ref(false)
+const baseDirty = ref(false)
+const source = ref('')
+const invalidSource = ref(false)
+
+let requestedKey: string | undefined
+let draftVersion = 0
+const revision = ref(0)
+const config = computed(() => {
+   const { xema } = props.dictionaryConfig
+   const { doctype } = props
+   const schemaId = surface.value === 'history' && selectedRevision.value?.schemaId || entry.value?.schemaId
+   const root = schemaId && xema.elements[schemaId] && (!doctype || xmlElementName(xema, schemaId) === doctype)
+      ? schemaId : doctype ? xemaElementId(xema, doctype) : xema.root
+   return { ...props.dictionaryConfig, xema: { ...xema, root } }
+})
+const editing = computed(() => config.value.editing)
+const sourceInputValue = computed(() => source.value.replace(/\r\n?/g, '\n'))
+const isEditing = computed(() => surface.value === 'edit')
+const protectedEntryId = computed(() => isEditing.value || surface.value === 'source' || reading.value || mutating.value
+   ? entry.value?.id ?? props.entryId : undefined)
+const dirty = unsavedEntry
+const historyId = computed(() => entry.value?.id || props.entryId || parseEntryId(idInput.value))
+const hasViewer = computed(() => {
+   const { xema, xemplate } = config.value
+   const { shown } = readFormattingFields(xemplate, xema.root, xmlElementName(xema, xema.root))
+   return Boolean(xemplate._xsl || xemplate._css || shown === true || shown === 'true')
+})
+const initialXml = computed(() => {
+   const { xema } = config.value
+   return xema._newXml || xema.newXml || (xema._dtd && initialDocument(parseDTD(xema._dtd))) || createInitialXml(xema)
+})
+const graphical = computed(() => isEditing.value && props.canEdit &&
+   editing.value.xonomyMode === 'graphical' && (!editing.value._js || useGraphical.value))
+const editorEntry = computed(() => {
+   if (surface.value === 'history') return previewHistory.value ? null : selectedRevision.value
+   return isEditing.value ? entry.value ?? { content: '' } : null
+})
+const viewerEntry = computed(() => {
+   if (surface.value === 'history') return previewHistory.value ? selectedRevision.value : null
+   return surface.value === 'view' ? entry.value : null
+})
+const viewerHtml = computed(() => viewerEntry.value ? entryHtml(viewerEntry.value, config.value, crossReferenceHref) : '')
+
+watch([() => props.dictId, () => props.doctype, () => props.entryId, () => props.mode],
+   ([, , id, mode]) => showRequestedEntry(id, mode), { immediate: true })
+watch([viewerHtml, () => route.query.link], showLinkTarget, { flush: 'post' })
+onBeforeUnmount(() => {
+   revision.value++
+   unsavedEntry.value = false
+})
+defineExpose({ toggleEditing, save, protectedEntryId })
+
+function showLinkTarget() {
+   if (surface.value !== 'view') return
+   const target = route.query.link
+   for (const link of container.value?.querySelectorAll<HTMLElement>('#viewer .linkable[name]') ?? []) {
+      const name = link.getAttribute('name')
+      link.style.display = name === target ? 'inline' : ''
+      if (name === target) link.scrollIntoView()
    }
+}
+
+function showStatus(text = 'Ready.', style = '') {
+   status.value = text
+   statusStyle.value = style
+}
+
+function markDirty(value = true) {
+   draftVersion++
+   dirty.value = baseDirty.value || value
+}
+
+function show(nextEntry: EntryDraft | null, nextSurface: Surface, isDirty = false) {
+   revision.value++
+   entry.value = nextEntry
+   surface.value = nextSurface
+   baseDirty.value = isDirty
+   reading.value = false
+   mutating.value = false
+   useGraphical.value = false
+   invalidSource.value = false
+   alert.value = ''
+   markDirty(isDirty)
+}
+
+function entryKey(id: number | null, mode: EntryMode) {
+   return JSON.stringify([props.dictId, props.doctype, id, mode])
+}
+
+function entryRoute(entryId?: number, mode?: EntryMode) {
+   const { dictId, doctype } = props
+   return { name: 'edit', params: { dictId, doctype, entryId: entryId ?? '', mode: mode ?? '' }, query: route.query }
+}
+
+function openRelatedEntry(entryId: number, entryType?: string) {
+   const { dictId, doctype, mode } = props
+   void router.push({ name: 'edit', params: { dictId, doctype: entryType || doctype, entryId, mode }, query: route.query })
+}
+
+async function leaveEntry(nextSurface: Surface) {
+   if (mutating.value) return
+   const failure = await router.push(entryRoute())
+   if (failure && !(isNavigationFailure(failure, NavigationFailureType.duplicated) && confirmEntryNavigation())) return
+   show(null, nextSurface)
+   idInput.value = ''
+   showStatus()
+}
+
+function showRequestedEntry(id: number | null, mode: EntryMode) {
+   const key = entryKey(id, mode)
+   if (requestedKey === key) return
+   requestedKey = key
+   if (id) void loadEntry(id, mode)
+   else {
+      show(null, 'empty')
+      idInput.value = ''
+      showStatus()
+   }
+}
+
+function parseEntryId(text: string) {
+   const value = text.trim()
+   const id = Number(value)
+   return /^\d+$/.test(value) && Number.isSafeInteger(id) && id > 0 ? id : null
+}
+
+function openById() {
+   if (mutating.value) return
+   if (!idInput.value.trim()) {
+      void leaveEntry('empty')
+      return
+   }
+   const id = parseEntryId(idInput.value)
+   if (id) void openEntry(id, entry.value?.id && isEditing.value ? 'edit' : 'view')
+   else showStatus('No such item.', 'warn')
+}
+
+async function openEntry(id: number, mode: EntryMode) {
+   if (dictionaryWorkspace.pendingFlagSave(props.dictId, id)) {
+      showStatus('Wait for the flag change to finish.', 'warn')
+      return
+   }
+   const failure = await router.push(entryRoute(id, mode))
+   if (isNavigationFailure(failure, NavigationFailureType.duplicated) && confirmEntryNavigation()) {
+      await loadEntry(id, mode)
+   }
+}
+
+async function loadEntry(id: number, mode: EntryMode) {
+   const dictionary = props.dictId
+   show(null, 'empty')
+   idInput.value = String(id)
+   reading.value = true
+   showStatus('Getting item...', 'wait')
+   const requestRevision = revision.value
+   try {
+      const pendingFlag = dictionaryWorkspace.pendingFlagSave(dictionary, id)
+      if (pendingFlag) {
+         await pendingFlag
+         if (requestRevision !== revision.value) return
+      }
+      const result = await entryEditorApi.read(dictionary, id)
+      if (requestRevision !== revision.value) return
+      if (result.success) {
+         entry.value = result
+         const nextSurface = !hasViewer.value || (mode === 'edit' && props.canEdit) ? 'edit' : 'view'
+         show(result, nextSurface)
+         showStatus()
+      } else showStatus('No such item.', 'warn')
+   } catch {
+      if (requestRevision === revision.value) showStatus('Failed to load entry.', 'warn')
+   } finally {
+      if (requestRevision === revision.value) reading.value = false
+   }
+}
+
+function toggleEditing() {
+   if (mutating.value) return
+   const id = entry.value?.id
+   if (surface.value === 'view' && props.canEdit && id) void openEntry(id, 'edit')
+   else if (isEditing.value && id && hasViewer.value) void openEntry(id, 'view')
+   else if (isEditing.value && !id) void leaveEntry('empty')
+}
+
+async function harvest() {
+   const requestRevision = revision.value
+   try {
+      const content: unknown = await (graphicalEditor.value || legacyEditor.value)?.harvest()
+      return typeof content === 'string' ? content : null
+   } catch {
+      if (requestRevision === revision.value) showStatus('Failed to read editor content.', 'warn')
+      return null
+   }
+}
+
+function save() {
+   if (isEditing.value && props.canEdit) void persist(entry.value?.id)
+}
+
+function clone() {
+   if (!mutating.value && props.canEdit && entry.value?.id && confirmEntryNavigation()) void persist()
+}
+
+async function persist(id?: number) {
+   const dictionary = props.dictId
+   if (mutating.value) return
+   mutating.value = true
+   const requestRevision = revision.value
+   try {
+      const pendingContent = isEditing.value ? harvest() : entry.value?.content
+      const savedVersion = draftVersion
+      const content = await pendingContent
+      if (!content || requestRevision !== revision.value) return
+      showStatus('Saving...', 'wait')
+      const result = await entryEditorApi.save(dictionary, content, id)
+      if (requestRevision !== revision.value && result.success) void dictionaryWorkspace.refreshEntries(dictionary)
+      if (requestRevision !== revision.value) return
+      if (!result.success) throw new Error('Entry rejected')
+      if (draftVersion !== savedVersion) {
+         // Keep the active document, including changes made by a custom editor during the request.
+         if (!id && !entry.value?.id) {
+            entry.value = { ...entry.value, id: result.id, content: entry.value?.content ?? result.content }
+            idInput.value = String(result.id)
+         }
+         showStatus('Saved an earlier version. Save again to include your latest edits.', 'warn')
+         void dictionaryWorkspace.refreshEntries(dictionary)
+         return
+      }
+      const nextSurface = hasViewer.value ? 'view' : 'edit'
+      show(result, nextSurface)
+      idInput.value = String(result.id)
+      requestedKey = entryKey(result.id, nextSurface)
+      void router.push(entryRoute(result.id, nextSurface))
+      showStatus()
+      if (result.feedback?.type === 'saveFeedbackHeadwordExists') {
+         alert.value = `WARNING: another entry with this headword exists. ID=${result.feedback.info}`
+      } else if (result.feedback) {
+         alert.value = result.feedback.type
+      }
+      void dictionaryWorkspace.refreshEntries(dictionary)
+   } catch {
+      if (requestRevision === revision.value) showStatus('Failed to save.', 'warn')
+   } finally {
+      if (requestRevision === revision.value) mutating.value = false
+   }
+}
+
+async function remove() {
+   const dictionary = props.dictId
+   const id = entry.value?.id
+   if (!id || !props.canEdit || mutating.value || !window.confirm('Careful now! Are you sure?')) return
+   const requestRevision = revision.value
+   mutating.value = true
+   showStatus('Deleting...', 'wait')
+   try {
+      const result = await entryEditorApi.remove(dictionary, id)
+      if (result.success) void dictionaryWorkspace.refreshEntries(dictionary)
+      if (requestRevision !== revision.value) return
+      if (!result.success) throw new Error('Deletion rejected')
+      show(null, 'empty')
+      idInput.value = ''
+      showStatus()
+      await router.replace(entryRoute())
+   } catch {
+      if (requestRevision === revision.value) showStatus('Failed to delete.', 'warn')
+   } finally {
+      if (requestRevision === revision.value) mutating.value = false
+   }
+}
+
+function refreshLinks() {
+   void entryLinks.value?.load()
+}
+
+async function toggleSource() {
+   if (mutating.value) return
+   if (surface.value === 'source' && sourceInput.value) {
+      const changed = sourceInput.value.value !== sourceInputValue.value
+      const content = changed ? sourceInput.value.value : source.value
+      if (!parseXml(content)) {
+         invalidSource.value = true
+         return
+      }
+      show({ ...entry.value, content }, 'edit', baseDirty.value || changed)
+      return
+   }
+   const requestRevision = revision.value
+   const pendingContent = harvest()
+   const sourceVersion = draftVersion
+   const content = await pendingContent
+   if (content == null || requestRevision !== revision.value || mutating.value) return
+   if (sourceVersion !== draftVersion) {
+      showStatus('The entry changed while preparing source. Open source again to include the latest edits.', 'warn')
+      return
+   }
+   source.value = content
+   show(entry.value, 'source', dirty.value)
+   await nextTick()
+   sourceInput.value?.focus()
+}
+
+async function toggleHistory() {
+   const dictionary = props.dictId
+   const id = historyId.value
+   if (!id || mutating.value || !confirmEntryNavigation()) return
+   if (surface.value === 'history') {
+      void openEntry(id, 'view')
+      return
+   }
+   revisions.value = []
+   selectedRevision.value = null
+   show(entry.value, 'history')
+   showStatus('Getting history...', 'wait')
+   const requestRevision = revision.value
+   try {
+      const data = await entryEditorApi.history(dictionary, id)
+      if (requestRevision !== revision.value) return
+      showStatus()
+      revisions.value = data.history
+      const latest = revisions.value[0]
+      if (latest && latest.action !== 'delete' && latest.action !== 'purge') selectRevision(latest)
+   } catch {
+      if (requestRevision === revision.value) showStatus('Failed to get history.', 'warn')
+   }
+}
+
+function selectRevision(item: EntryRevision, pretty = false) {
+   selectedRevision.value = item
+   previewHistory.value = pretty
+   revision.value++
+}
+
+async function reviveRevision(item: EntryRevision) {
+   const id = item.entry_id
+   const previousKey = requestedKey
+   const key = entryKey(id, 'edit')
+   requestedKey = key
+   const failure = await router.push(entryRoute(id, 'edit'))
+   if (failure && !isNavigationFailure(failure, NavigationFailureType.duplicated)) {
+      if (requestedKey === key) requestedKey = previousKey
+      return
+   }
+   if (requestedKey !== key || route.name !== 'edit' || entryKey(props.entryId, 'edit') !== key) return
+   idInput.value = String(id)
+   show({ ...item, id }, 'edit', true)
+}
+
+async function followHeadword(event: MouseEvent) {
+   if (!(event.target instanceof Element)) return
+   const link = event.target.closest<HTMLAnchorElement>('a.xref[data-text]')
+   if (!link || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+   event.preventDefault()
+   const requestRevision = revision.value
+   const results = await searchEntriesFromRoute({ searchtext: link.dataset.text, modifier: 'substring' })
+   if (requestRevision === revision.value && results?.[0]) void openEntry(results[0].id, 'view')
 }
 </script>

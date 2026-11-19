@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,10 @@ import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
 import traceback
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypedDict, Union
+from unittest.mock import patch
 
 from bs4 import Tag
 
@@ -859,6 +862,226 @@ try:
     markup = ops.get_entry_rendering(dictDB, xml, ops.get_xslt_transformer(xslt))
     assert markup == {"contentHtml": "<div>subentry headword edited</div>"}
     print("PASS Entry rendering resolves subentries for both XML and XSLT responses")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    ops.makeDict("purge-test", "smd", "Import rollback test", "", "root@localhost")
+    database = Path(test_directory.name) / "dicts" / "purge-test.sqlite"
+    upload = Path(test_directory.name) / "broken.xml"
+    upload.write_text("<dictionary><entry><headword>First valid entry</headword></entry><entry>", encoding="utf-8")
+    with ops.getDB("purge-test") as conn:
+        initial_entries = conn.execute("select xml from entries order by id").fetchall()
+        assert initial_entries
+        result = subprocess.run([sys.executable, "adminscripts/import.py", "-pp", str(database), str(upload)],
+                                capture_output=True, text=True)
+        assert result.returncode != 0
+        assert conn.execute("select xml from entries order by id").fetchall() == initial_entries
+        upload.write_text("<entry><headword>A standalone entry</headword></entry>", encoding="utf-8")
+        result = subprocess.run([sys.executable, "adminscripts/import.py", "-pp", str(database), str(upload)],
+                                capture_output=True, text=True, check=True)
+        assert "100% - 1 total entries imported." in result.stdout
+        assert "A standalone entry" in conn.execute("select xml from entries").fetchone()["xml"]
+    print("PASS A malformed replacement does not purge existing entries")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    ops.makeDict("preview-regression", "blank", "Preview", "", "root@localhost")
+    with closing(ops.getDB("preview-regression")) as preview_db:
+        preview_config = ops.readDictConfigs(preview_db)
+        assert ops.readRandomOne(preview_db, preview_config)["id"] == 0
+        preview_config["xema"]["elements"]["entry"]["elementName"] = "example"
+        entry_id, _, success, _ = ops.createEntry(preview_db, preview_config, "<example/>", "test@lexonomy")
+        assert success
+        assert ops.readRandomOne(preview_db, preview_config)["id"] == entry_id
+    print("PASS Entry preview handles empty dictionaries and root definitions with an XML name override")
+
+    users = {"previous@example.org": {"canEdit": True, "canConfig": True, "canUpload": True, "canDownload": True}}
+    new_users = {**users, "new@example.org": dict(users["previous@example.org"])}
+    with patch.object(ops, "sendmail") as sendmail:
+        ops.notifyUsers(users, new_users, {"title": "Preview"}, "preview-regression")
+        assert sendmail.call_count == 1
+        assert sendmail.call_args.args[0] == "new@example.org"
+    print("PASS Dictionary permission notifications handle a newly added user")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    local_xml = Path(test_directory.name) / "fixture-for-xslt.xml"
+    local_xml.write_text("<fixture>outside input</fixture>", encoding="utf-8")
+    transform = ops.get_xslt_transformer(f"""
+        <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
+            <xsl:template match="/"><div><xsl:value-of select="document('{local_xml.as_uri()}')/fixture"/></div></xsl:template>
+        </xsl:stylesheet>
+    """)
+    assert transform("<entry/>") is None
+    print("PASS Dictionary stylesheets cannot read outside their input")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    for name in ("links-public", "links-private"):
+        assert ops.makeDict(name, "smd", name, "**Dictionary description**", "root@localhost")
+    with ops.getDB("links-public") as conn:
+        ops.updateDictConfig(conn, "links-public", "publico", {"public": True, "licence": "cc-by-4.0"})
+    assert ops.links_add("links-public", "entry", "1_1", "links-private", "entry", "1_1")
+    anonymous = {"email": "", "loggedin": False}
+    member = {"email": "root@localhost", "loggedin": True}
+    assert ops.links_get("links-public", "", "", "", "", "", anonymous) == []
+    assert ops.read_dictionary_links("links-public", anonymous) == {"links": {"to": [], "from": []}, "dictionaries": {}}
+    assert len(ops.links_get("links-public", "", "", "", "", "", member)) == 1
+    response = ops.read_dictionary_links("links-public", member)
+    assert len(response["links"]["to"]) == 1 and not response["links"]["from"]
+    assert response["dictionaries"]["links-private"] == {
+        "title": "links-private", "blurb": "<p><strong>Dictionary description</strong></p>", "isExternal": False,
+    }
+    print("PASS Link results respect the visibility of both dictionaries")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    with closing(ops.getDB("links-public")) as link_db:
+        link_config = ops.readDictConfigs(link_db)
+        first_id, _, _, _ = ops.createEntry(link_db, link_config, "<entry><headword>Wrong sense</headword></entry>", "test@lexonomy")
+        second_id, _, _, _ = ops.createEntry(link_db, link_config, "<entry><headword>Right example</headword></entry>", "test@lexonomy")
+        link_db.executemany("insert into linkables(entry_id, txt, element, preview) values (?, ?, ?, ?)", [
+            (first_id, "shared", "sense", "Sense preview"),
+            (second_id, "shared", "example", "Example preview"),
+        ])
+        link_db.commit()
+    ops.links_add("links-public", "example", "shared", "links-public", "sense", "shared")
+    links = ops.links_get("links-public", "example", "shared", "", "", "", {"email": "", "loggedin": False})
+    assert len(links) == 1
+    assert (links[0]["source_entry"], links[0]["source_preview"]) == (str(second_id), "Example preview")
+    assert (links[0]["target_entry"], links[0]["target_preview"]) == (str(first_id), "Sense preview")
+    print("PASS Cross-links match element as well as identifier")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    ops.createUser('<user email="mixed@example.org" password="test"/>')
+    assert ops.makeDict("mixed-case-login", "blank", "Mixed case", "", "mixed@example.org")
+    credentials = ops.login("Mixed@Example.org", "test")
+    assert credentials["success"]
+    assert ops.verifyLogin("Mixed@Example.org", credentials["key"])["email"] == "mixed@example.org"
+    with closing(ops.getDB("mixed-case-login")) as login_db:
+        permissions, _ = ops.verifyLoginAndDictAccess("Mixed@Example.org", credentials["key"], login_db)
+        assert permissions["canEdit"]
+    print("PASS Mixed-case email logs in and retains dictionary permissions")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    assert ops.makeDict("recursive-import", "blank", "Recursive import", "", "root@localhost")
+    import_directory = Path(test_directory.name)
+    upload = import_directory / "recursive.xml"
+    upload.write_text("<dictionary><entry> a <entry>nested</entry> b </entry>separator<entry/></dictionary>", encoding="utf-8")
+    ops.importfile("recursive-import", str(upload), "root@localhost")
+    deadline = monotonic() + 5
+    while not (status := ops.getImportStatus(str(upload)))["finished"] and not status["errors"] and monotonic() < deadline:
+        sleep(0.02)
+    assert status["finished"] and not status["errors"], status
+    with closing(ops.getDB("recursive-import")) as import_db:
+        actual = import_db.execute("select xml from entries order by id").fetchall()
+        assert len(actual) == 2
+        assert ops.parse(actual[0]["xml"]).text == " a nested b "
+        assert ops.parse(actual[1]["xml"]).text == ""
+        export_xml = "".join(ops.export("-7 recursive import", import_db, ops.readDictConfigs(import_db)))
+        assert ops.parse(export_xml).entry.text == " a nested b "
+        import_db.execute("update configs set json=? where id='xema'", (json.dumps({"root": "", "elements": {}}),))
+        import_db.commit()
+        upload.write_text('<entry><entry attribute=">"/></entry>', encoding="utf-8")
+        database = import_directory / "dicts" / "recursive-import.sqlite"
+        subprocess.run([sys.executable, "adminscripts/import.py", "--purge", str(database), str(upload)],
+                       capture_output=True, text=True, check=True)
+        actual = import_db.execute("select xml from entries").fetchall()
+        assert len(actual) == 1
+        assert ops.parse(actual[0]["xml"])["attribute"] == ">"
+    print("PASS XML import and export preserve recursive entries and mixed content")
+
+    interrupted = import_directory / "interrupted.py"
+    interrupted.write_text('import os\nprint("100% - 100 entries imported so far...", flush=True)\nos._exit(1)\n', encoding="utf-8")
+    receipt = str(import_directory / "interrupted")
+    ops._startSubprocess(receipt, str(interrupted), [])
+    deadline = monotonic() + 5
+    while not (status := ops.getImportStatus(receipt))["errors"] and monotonic() < deadline:
+        sleep(0.02)
+    assert not status["finished"] and status["errors"], status
+    assert "stopped before it finished" in ops.showImportErrors(receipt, 100)["errorData"]
+    print("PASS A failed import cannot be mistaken for a committed 100% checkpoint")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    source = "<entry>  <term>A &amp; B</term>\n  <![CDATA[<example>]]><!--keep--></entry>"
+    assert str(ops.parse(source)) == source
+    _, _, success, _ = ops.createEntry(dictDB, configsFromDB, "<entry><term>unfinished", "test@lexonomy")
+    assert not success
+    print("PASS XML saves reject incomplete entries and keep mixed whitespace, CDATA, and comments")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    definition = {
+        "root": "main",
+        "elements": {
+            "main": {"elementName": "entry", "children": [
+                {"name": "cycle", "min": 0, "max": None},
+                {"name": "sorting", "min": 0, "max": None},
+                {"name": "printed", "min": 0, "max": None},
+                {"name": "shared", "min": 0, "max": None},
+            ]},
+            "cycle": {"children": [{"name": "main", "min": 0, "max": None}]},
+            "sorting": {"elementName": "sort"},
+            "printed": {"children": [{"name": "local-form", "min": 0, "max": None}]},
+            "shared": {"children": [{"name": "shared-form", "min": 0, "max": None}]},
+            "local-form": {"elementName": "form.alt"},
+            "shared-form": {"elementName": "form.alt"},
+        },
+    }
+    configs = overwriteConfig(configsFromDB, {
+        "xema": definition, "titling": {"headwordSorting": "sorting"}, "subbing": {"shared-form": {}},
+    })
+    source = "<entry><headword>Headword</headword><sort>Sort key</sort><printed><form.alt>Inline</form.alt></printed><shared><form.alt>Shared</form.alt></shared></entry>"
+    entry_id, entry, success, _ = ops.createEntry(dictDB, configs, source, "test@lexonomy")
+    assert success and entry.printed.find("form.alt").text == "Inline"
+    assert entry.shared.find("lxnm:subentryParent") is not None
+    _, saved, success, _ = ops.createEntry(dictDB, configs, str(entry), "test@lexonomy", id=entry_id)
+    assert success and saved.shared.find("lxnm:subentryParent") is not None
+    assert ops.get_entry_sortkey(entry, configs) == "Sort key"
+    assert ops.find_path_to_element(definition, "main", "shared-form") == ["shared", "form.alt"]
+
+    configs["subbing"] = {
+        "local-form": {"titling": {"headword": "fallback"}},
+        "shared-form": {"titling": {"headword": "label"}},
+    }
+    source = ("<entry><printed><form.alt><fallback>Print title</fallback></form.alt></printed>"
+              "<shared><form.alt><fallback>Wrong fallback</fallback><label>Shared title</label></form.alt></shared></entry>")
+    parent_id, _, success, _ = ops.createEntry(dictDB, configs, source, "test@lexonomy")
+    assert success
+    children = dictDB.execute("select child_id from sub where parent_id=?", (parent_id,)).fetchall()
+    records = ops.readEntries(dictDB, configs, [row["child_id"] for row in children], titlePlain=True)
+    assert {row["schemaId"]: row["titlePlain"] for row in records} == {
+        "local-form": "Print title", "shared-form": "Shared title",
+    }
+    detached = next(row for row in records if row["schemaId"] == "shared-form")
+    ops.createEntry(dictDB, configs, detached["xml"], "test@lexonomy", id=detached["id"])
+    assert ops.readEntries(dictDB, configs, detached["id"], titlePlain=True)[0]["titlePlain"] == "Shared title"
+    source = "<form.alt><fallback>Wrong fallback</fallback><label>Replaced source title</label></form.alt>"
+    ops.createEntry(dictDB, configs, source, "test@lexonomy", id=detached["id"])
+    reread = ops.readEntries(dictDB, configs, detached["id"], titlePlain=True)[0]
+    assert reread["schemaId"] == "shared-form" and reread["titlePlain"] == "Replaced source title"
+    print("PASS Xema aliases distinguish identical tags by parent and support recursive flag paths")
 except Exception:
     failures += 1
     traceback.print_exc()

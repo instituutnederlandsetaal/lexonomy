@@ -1,65 +1,45 @@
 <template>
-  <div class="editor">
-    <EntryDisplay ref="entry" @dirty-change="$emit('dirty-change', $event)" />
-  </div>
+   <div ref="surface" class="editor">
+      <EntryDisplay ref="entryDisplay" :content="content" :original-xml="xml"
+                    @dirty-change="reportEntryDirty"/>
+   </div>
 </template>
 
-<script>
-import { xml2js } from 'xml-js'
+<script setup lang="ts">
+import { editorContextKey, notifyLinksChangedKey, requiredFieldsKey, schemaAncestorsKey, setPopupDirtyKey } from './editor-context.ts'
+import { computed, provide, ref } from 'vue'
+import { xml2js, type Element } from 'xml-js'
+import type { EditorContext } from './editor-context.ts'
 import EntryDisplay from './components/EntryDisplay.vue'
-import InlineComponent from './components/displayTypes/InlineComponent.vue'
-import PopupComponent from './components/displayTypes/PopupComponent.vue'
-import SubentryComponent from './components/displayTypes/SubentryComponent.vue'
-import ReadOnlyComponent from './components/displayTypes/ReadOnlyComponent.vue'
-import DropdownComponent from './components/displayTypes/DropdownComponent.vue'
-import MediaComponent from './components/displayTypes/MediaComponent.vue'
-import TextInputComponent from './components/displayTypes/TextInputComponent.vue'
-import TextInputWithMarkupComponent from './components/displayTypes/TextInputWithMarkupComponent.vue'
 
-const editorComponents = {
-  InlineComponent, PopupComponent, SubentryComponent, ReadOnlyComponent,
-  DropdownComponent, MediaComponent, TextInputComponent, TextInputWithMarkupComponent
-}
+const props = defineProps<EditorContext & { xml: string }>()
+const emit = defineEmits<{ 'dirty-change': [dirty: boolean]; 'links-changed': [] }>()
+const entryDisplay = ref<InstanceType<typeof EntryDisplay> | null>(null)
+const surface = ref<HTMLElement | null>(null)
+const entryDirty = ref(false)
+const dirtyPopups = new Set<symbol>()
+const content = xml2js(props.xml, { compact: false, captureSpacesBetweenElements: true }) as Element
+provide(editorContextKey, props)
+provide(schemaAncestorsKey, computed(() => []))
+provide(requiredFieldsKey, new Set<() => string | undefined>())
+provide(notifyLinksChangedKey, () => emit('links-changed'))
+provide(setPopupDirtyKey, (popup, dirty) => {
+   if (dirty) dirtyPopups.add(popup)
+   else if (!dirtyPopups.delete(popup)) return
+   emit('dirty-change', entryDirty.value || Boolean(dirtyPopups.size))
+})
 
-export default {
-  components: { EntryDisplay },
-  props: {
-    entry: { type: Object, required: true }
-  },
-  emits: ['dirty-change', 'links-changed'],
-  data() {
-    const xml2jsConfig = { compact: false, captureSpacesBetweenElements: true }
-    const { dictId, userDicts, doctype, dictConfigs, xml } = this.entry
-    return {
-      editorState: {
-        entry: {
-          dictId, userDicts, doctype,
-          dictConfigs: JSON.parse(JSON.stringify(dictConfigs)),
-          content: xml2js(xml, xml2jsConfig)
-        },
-        xml2jsConfig,
-        initialContent: xml2js(xml, xml2jsConfig),
-        headwordElement: null,
-        headwordData: null,
-        openedPopups: []
-      }
-    }
-  },
-  provide() {
-    return {
-      editorState: this.editorState,
-      editorComponents,
-      editorBus: new EventTarget(),
-      requiredFields: new Set(),
-      notifyLinksChanged: () => this.$emit('links-changed', this.entry.id)
-    }
-  },
-  methods: {
-    harvest() {
-      return this.$refs.entry.getXmlData()
-    }
-  }
+function reportEntryDirty(dirty: boolean) {
+   entryDirty.value = dirty
+   emit('dirty-change', dirty || Boolean(dirtyPopups.size))
 }
+defineExpose({
+   harvest() {
+      const focused = document.activeElement
+      if (focused instanceof HTMLElement && surface.value?.contains(focused)) focused.blur()
+      return entryDisplay.value?.harvest()
+   }
+})
 </script>
 
 <style lang="scss" >
@@ -277,25 +257,6 @@ $blue-600: #023672;
   }
 
 
-  .dropdown-content {
-    background: #FFFFFF;
-    box-shadow: 0px 2px 14px rgba(2, 54, 114, 0.3);
-    border-radius: 4px;
-
-    li {
-      &:hover,
-      &.selected {
-        span {
-          background-color: #EDF1F7;
-        }
-      }
-
-      span {
-        color: #637383;
-      }
-
-    }
-  }
 
 }
 
@@ -304,17 +265,10 @@ $blue-600: #023672;
     min-height: 0;
   }
 
-  .select-wrapper {
-    flex: 1;
-
-    ul {
-      width: 100% !important;
-    }
-  }
-
   .error {
     input,
-    textarea {
+    textarea,
+    .form-select-trigger {
       color: #637383 !important;
       border-color: #FB4646 !important;
       background-color: #FFF2F2 !important;
@@ -324,11 +278,7 @@ $blue-600: #023672;
       }
     }
 
-    .select-wrapper {
-      .caret {
-        z-index: 1;
-      }
-    }
+
   }
 
   input,

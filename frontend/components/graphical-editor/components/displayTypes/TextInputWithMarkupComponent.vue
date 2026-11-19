@@ -1,402 +1,158 @@
 <template>
-  <div>
-    <section class="input-section" v-if="elementData.shown && !readOnly">
-      <label v-if="isAttribute" class="text--md">{{ computedElementNameWithColon }}</label>
-      <div ref="wholeInput" class="text-with-markup">
-        <span
-          v-for="(element, index) in values"
-          :key="index + element.type"
-          :ref="index"
-          :data-index="index"
-          :data-type="element.type"
-          :data-name="element.name || null"
-          :data-text="element.text"
-          :class="calculatedClasses(element)"
-          :style="calculatedStyles(element)"
-          role="textbox"
-          contenteditable
-          @focusout="updateValue"
-          style="white-space: pre-wrap"
-          v-html="element.text"
-        ></span>
-
-      </div>
-      <div ref="markActionButton" class="dropdown">
-        <button class="secondary mark-as" @click="toggleMarkActions">Mark as</button>
-        <div v-show="showMarkActions" class="vue-dropdown-content">
-          <button v-for="(element, index) in markupElements"
-                  :key="index"
-                  class="tertiary"
-                  :style="calculatedStyles(element)"
-                  style="border: none;"
-                  @click="markTextAs(element.type)"
-                  :disabled="element.disabled">{{ element.type }}
-          </button>
-        </div>
-      </div>
-    </section>
-    <section class="read-only" v-if="elementData.shown && readOnly && readOnlyValues.length > 0">
-      <p v-if="showPreview" :class="computedClass">{{ computedElementNameWithColon }} </p>
-      <span :class="computedClass">
-        <span v-for="(element, i) in readOnlyValues"
-              :key="i + element.type"
-              style="white-space: pre-wrap"
-              :style="calculatedStyles(element)"
-              v-html="element.text"/>
-      </span>
-    </section>
-  </div>
+   <div>
+      <section v-if="elementData.shown && !readOnly" class="input-section">
+         <div ref="input" class="text-with-markup">
+            <span v-for="segment in segments" :key="segment.index" :data-index="segment.index"
+                  :class="segment.name ? 'dynamic-element' : 'text-element'"
+                  :style="styles(segment.name)" :role="segment.editable ? 'textbox' : undefined"
+                  :aria-label="segment.editable ? xmlName : undefined"
+                  :contenteditable="segment.editable ? 'plaintext-only' : false"
+                  v-sync-text="segment.text" @input="updateValue(segment, $event)"
+                  @focusout="rememberSelection"/>
+         </div>
+         <DropdownMenuRoot v-if="markupChoices.length" :modal="false">
+            <DropdownMenuTrigger type="button" class="secondary mark-as" :disabled="editorLocked"
+                                 @pointerdown="rememberSelection" @keydown.enter="rememberSelection"
+                                 @keydown.space="rememberSelection">Mark as</DropdownMenuTrigger>
+            <DropdownMenuPortal>
+               <DropdownMenuContent class="graphical-action-menu" :inert="editorLocked" align="start" :side-offset="4" :collision-padding="8">
+                  <DropdownMenuItem @select="markSelection('')">text</DropdownMenuItem>
+                  <DropdownMenuItem v-for="choice in markupChoices" :key="choice" :style="styles(choice)" @select="markSelection(choice)">
+                     {{ xmlElementName(xema, choice) }}
+                  </DropdownMenuItem>
+               </DropdownMenuContent>
+            </DropdownMenuPortal>
+         </DropdownMenuRoot>
+      </section>
+      <section v-else-if="elementData.shown" class="read-only">
+         <p v-if="showPreview" class="text--xs">{{ xmlName }}: </p>
+         <span :class="showPreview ? 'text--xs' : 'text--md'">
+            <span v-for="segment in segments" :key="segment.index" :style="styles(segment.name)">{{ segment.text }}</span>
+         </span>
+      </section>
+   </div>
 </template>
 
-<script>
+<script setup lang="ts">
+import { editorLockedKey, editorContextKey } from '../../editor-context.ts'
+import { computed, inject, ref, type CSSProperties, type Directive } from 'vue'
+import type { Element } from 'xml-js'
+import { DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuRoot, DropdownMenuTrigger } from 'reka-ui'
+import { xemaElementId, xmlElementName } from '../../../../js/xema.ts'
+import { readFormattingFields } from '../../../../js/xemplate.ts'
+import type { EditorChild, ElementDisplay } from '../../editor-schema.ts'
 
-import stylesFromConfig from "../../shared-resources/mixins/stylesFromConfig.js"
-import computedElementName from "../../shared-resources/mixins/computedElementName.js"
-import showPreview from "../../shared-resources/mixins/showPreview.js"
+const props = defineProps<{
+   elementData: ElementDisplay
+   elementName: string
+   content: Element[]
+   children?: EditorChild[]
+   showPreview?: boolean
+}>()
+const emit = defineEmits<{ input: [change: { elementName: string; elements: Element[] }] }>()
+const editor = inject(editorContextKey)!
+const editorLocked = inject(editorLockedKey)!
+const xema = computed(() => editor.config.xema)
+const input = ref<HTMLElement | null>(null)
+const xmlName = computed(() => xmlElementName(xema.value, props.elementName))
+const readOnly = computed(() => props.elementData.readOnly || props.showPreview)
+const markupChoices = computed(() => (props.children ?? []).filter(child => !child.isAttribute).map(child => child.name))
+type Segment = { index: number; node?: Element; name?: string; text: string; editable: boolean }
+type Selection = { index: number; start: number; end: number; text: string }
+let selection: Selection | undefined
 
+const segments = computed<Segment[]>(() => {
+   if (!props.content.length) return [{ index: 0, text: '', editable: true }]
+   return props.content.flatMap((node, index) => {
+      const simple = (node.elements?.length ?? 0) <= 1 && (node.elements?.every(child => child.type === 'text') ?? true)
+      if (node.type === 'text' || node.type === 'element' || node.type === 'cdata') {
+         return [{ index, node, text: nodeText(node), editable: node.type === 'text' || (node.type === 'element' && simple),
+            name: node.name ? xemaElementId(xema.value, node.name, props.elementName) : undefined }]
+      }
+      return []
+   })
+})
 
-export default {
-  inject: ['editorState'],
-  name: "TextInputWithMarkupComponent",
-  emits: ['input'],
-  props: {
-    elementData: Object,
-    elementName: String,
-    content: {
-      type: [Object, Array],
-      required: true
-    },
-    children: Array
-  },
-  mixins: [
-    stylesFromConfig,
-    computedElementName,
-    showPreview
-  ],
-  computed: {
-    readOnlyValues() {
-      return this.values.filter(el => el.text)
-    }
-  },
-  watch: {
-    content() {
-      this.computeValues()
-    },
-    showMarkActions(show) {
-      if (show) {
-        window.addEventListener("click", this.watchForOutsideClick)
-      } else {
-        window.removeEventListener("click", this.watchForOutsideClick)
-      }
-    }
-  },
-  data() {
-    return {
-      values: [],
-      markupElements: null,
-      combinedValue: "",
-      showMarkActions: false
-    }
-  },
-  created() {
-    this.markupElements = [{type: "text", disabled: false}]
-    if (Array.isArray(this.children)) {
-      this.children.forEach(child => {
-        if (!child.isAttribute) {
-          this.markupElements.push({type: this.getElementNameInConfig(child.name), disabled: false})
-        }
-      })
-    }
-  },
-  mounted() {
-    this.computeValues()
-  },
-  beforeUnmount() {
-    window.removeEventListener("click", this.watchForOutsideClick)
-  },
-  methods: {
-    getElementNameInConfig(elementName) {
-      let config = this.editorState.entry.dictConfigs.xema.elements
-      let configData = config[elementName]
-      return (configData && configData.elementName) || elementName
-    },
-    computeValues() {
-      this.values = []
-      if (Array.isArray(this.content) && this.content.length > 0) {
-        this.content.forEach((element, index) => {
-          if (element.type === "text") {
-            this.values.push({
-              type: "text",
-              text: element.text,
-              index: index,
-              name: null
-            })
-          } else if (element.type === "element") {
-            this.values.push({
-              type: element.type,
-              name: element.name || null,
-              text: this.findTextInElement(element.elements),
-              index: index
-            })
-          }
-        })
-      } else {
-        this.values = [{
-          type: "text",
-          text: "",
-          index: 0,
-          name: null
-        }]
-      }
-    },
-    updateValue(event) {
-      this.values[event.target.dataset.index].text = event.target.textContent
-      this.updateParent()
-    },
-    updateParent() {
-      let elements
-      // Check if it's array
-      if (Array.isArray(this.values)) {
-        elements = []
-        this.values.forEach((element) => {
-          switch (element.type) {
-            case "text":
-              if (element.text !== "") {
-                elements.push({
-                  type: "text",
-                  text: element.text
-                })
-              }
-              break
-            default:
-              if (element.text !== "") {
-                let newEl = {
-                  type: "element",
-                  name: element.name,
-                  elements: [{type: "text", text: element.text}]
-                }
-                let contentElement = this.content.find(el => el.name === element.name)
-                if (contentElement && contentElement.attributes) {
-                  newEl.attributes = contentElement.attributes
-                }
-                elements.push(newEl)
-              }
-          }
-        })
+const vSyncText: Directive<HTMLElement, string> = {
+   mounted(el, { value }) { el.textContent = value },
+   updated(el, { value }) { if (el.textContent !== value) el.textContent = value }
+}
 
-      } else {
-        // Assign new content
-        elements = Object.assign({}, this.content)
-        elements.text = "" + this.values[0].text
-      }
-      if (JSON.stringify(elements) === JSON.stringify(this.content)) {
-        return
-      }
-      // Emit event with new data
-      this.$emit('input', {elementName: this.elementName, elements: elements})
-    },
-    findTextInElement(elements) {
-      if (Array.isArray(elements)) {
-        let textElement = elements.find(el => el.type === "text")
-        return textElement.text || ""
-      }
-      return ""
-    },
-    calculatedStyles(element) {
-      let configs = null
-      switch (element.type) {
-        case "text":
-          configs = this.getStylesFromConfig(this.elementName)
-          break
-        case "element":
-          configs = this.getStylesFromConfig(element.name)
-          break
-        default:
-          configs = this.getStylesFromConfig(element.type)
-      }
-      if (configs.color) {
-        configs.borderColor = configs.color
-      }
-      return configs
-    },
-    calculatedClasses(element) {
-      let output = []
-      if (element.text === "") {
-        output.push("empty-element")
-      }
-      if (element.type === "text") {
-        output.push("text-element")
-      } else {
-        output.push("dynamic-element")
-      }
-      return output
-    },
-    markTextAs(attribute) {
-      this.showMarkActions = false
-      const {fromElement, start, end, selection} = this.getSelection()
-      if (!fromElement || !selection) {
-        return
-      }
-      let newValues = []
+function nodeText(node: Element): string {
+   return String(node.text ?? node.cdata ?? node.elements?.map(nodeText).join('') ?? '')
+}
 
-      if (start !== 0) {
-        newValues.push({
-          type: fromElement.dataset.type,
-          text: fromElement.textContent.substring(0, start),
-          name: fromElement.dataset.name || null
-        })
-      }
-      switch (attribute) {
-        case "text":
-          newValues.push(
-            {
-              type: "text",
-              text: selection,
-              name: null
-            })
-          break
-        default:
-          newValues.push(
-            {
-              type: "element",
-              text: selection,
-              name: attribute || null
-            })
-      }
-      if (end !== fromElement.textContent.length) {
-        newValues.push({
-          type: fromElement.dataset.type,
-          text: fromElement.textContent.substring(end, fromElement.textContent.length),
-          name: fromElement.dataset.name || null
-        })
-      }
+function styles(name?: string): CSSProperties {
+   const id = name ?? props.elementName
+   const { background, colour, slant, weight } = readFormattingFields(editor.config.xemplate, id, xmlElementName(xema.value, id))
+   return { backgroundColor: background, color: colour, borderColor: colour, fontStyle: slant, fontWeight: weight }
+}
 
-      this.values.splice(Number(fromElement.dataset.index), 1, ...newValues)
-      this.tryMergingValues()
-      this.updateParent()
-    },
-    tryMergingValues() {
-      if (this.values.length < 2) {
-        return
-      }
-      for (let i = 0; i < this.values.length - 1; i++) {
-        let val = this.values[i]
-        let nextVal = this.values[i + 1]
-        if (val.type === nextVal.type && val.name === nextVal.name) {
-          val.text += nextVal.text
-          this.values.splice(i, 2, val)
-          this.tryMergingValues()
-          break
-        }
-      }
-    },
-    getSelection() {
-      let sel = getSelection()
-      let rng, startSel, endSel
-      let displaytext = this.$refs["wholeInput"]
-      if (!sel.rangeCount
-        || displaytext.compareDocumentPosition((rng = sel.getRangeAt(0)).startContainer) === Node.DOCUMENT_POSITION_PRECEDING
-        || displaytext.compareDocumentPosition(rng.endContainer) === Node.DOCUMENT_POSITION_FOLLOWING) {
-        return {}
-      } else {
-        let fromElement = sel.focusNode.parentElement
-        startSel = displaytext.compareDocumentPosition(rng.startContainer) === Node.DOCUMENT_POSITION_FOLLOWING ? 0 : rng.startOffset
-        endSel = displaytext.compareDocumentPosition(rng.endContainer) === Node.DOCUMENT_POSITION_PRECEDING ? displaytext.textContent.length : rng.endOffset
-        sel = fromElement.textContent.substring(startSel, endSel)
-        return {fromElement: fromElement, start: startSel, end: endSel, selection: sel}
-      }
-    },
+function updateValue(segment: Segment, event: Event) {
+   const text = (event.currentTarget as HTMLElement).textContent ?? ''
+   if (text === segment.text) return
+   const updated = segment.node?.type === 'element'
+      ? { ...segment.node, elements: text ? [{ type: 'text', text }] : [] }
+      : { type: 'text', text }
+   const elements = [...props.content]
+   elements.splice(segment.index, segment.node ? 1 : 0, updated)
+   emit('input', { elementName: props.elementName, elements })
+}
 
-    toggleMarkActions() {
-      this.showMarkActions = !this.showMarkActions
-    },
-    watchForOutsideClick(event) {
-      if (this.$refs.markActionButton && !this.$refs.markActionButton.contains(event.target)) {
-        this.toggleMarkActions()
-      }
-    }
-  }
+function rememberSelection() {
+   const current = window.getSelection()
+   if (!current?.rangeCount || current.isCollapsed) return
+   const range = current.getRangeAt(0)
+   const startParent = range.startContainer instanceof HTMLElement ? range.startContainer : range.startContainer.parentElement
+   const field = startParent?.closest<HTMLElement>('span[data-index]')
+   if (!field || !input.value?.contains(field) || !field.contains(range.endContainer)) return
+   const index = Number(field.dataset.index)
+   const segment = segments.value.find(item => item.index === index)
+   if (!segment?.editable || Object.keys(segment.node?.attributes ?? {}).length) return
+   const before = range.cloneRange()
+   before.selectNodeContents(field)
+   before.setEnd(range.startContainer, range.startOffset)
+   const start = before.toString().length
+   selection = { index, start, end: start + range.toString().length, text: field.textContent ?? '' }
+}
+
+function markSelection(mark: string) {
+   const saved = selection
+   selection = undefined
+   if (!saved) return
+   const segment = segments.value.find(item => item.index === saved.index)
+   if (!segment?.editable || segment.text !== saved.text || !segment.node) return
+   const previousName = segment.node.name
+   const chosenName = mark ? xmlElementName(xema.value, mark) : undefined
+   const parts: [string, string | undefined][] = [
+      [saved.text.slice(0, saved.start), previousName],
+      [saved.text.slice(saved.start, saved.end), chosenName],
+      [saved.text.slice(saved.end), previousName],
+   ]
+   const replacement = parts.filter(([text]) => text !== '').map(([text, name]): Element =>
+      name ? { type: 'element', name, elements: [{ type: 'text', text }] } : { type: 'text', text })
+   const elements = [...props.content]
+   elements.splice(saved.index, 1, ...replacement)
+   emit('input', { elementName: props.elementName, elements })
 }
 </script>
 
-<style lang="scss" scoped>
-.text-with-markup {
-  font-style: normal;
-  text-align: left;
-
-
-  span[contenteditable] {
-    margin: 0;
-    padding: 5px 1px;
-    border-radius: 0;
-    line-height: 24px;
-    text-align: left;
-    transition: none;
-
-    &:focus,
-    &:hover{
-      padding: 4px 0;
-      border: 1px solid;
-      text-decoration: none;
-    }
-
-    &.empty-element {
-      padding: 4px 16px;
-    }
-    &.text-element {
-      text-decoration: none;
-    }
-  }
+<style scoped>
+.text-with-markup { font-style: normal; text-align: left; }
+.text-with-markup span,
+.read-only span { white-space: pre-wrap; }
+.text-with-markup span[contenteditable="plaintext-only"] {
+   display: inline;
+   padding: 5px 1px;
+   border-radius: 0;
+   line-height: 24px;
 }
-
-.input-section {
-  display: flex;
-  align-items: center;
-
-  label {
-    font-size: 1rem;
-    text-transform: capitalize;
-    padding-right: 10px;
-  }
+.text-with-markup span[contenteditable="plaintext-only"]:hover,
+.text-with-markup span[contenteditable="plaintext-only"]:focus {
+   padding: 4px 0;
+   border: 1px solid;
 }
-
-.markup {
-  margin: 0 5px;
-}
-
-button {
-  margin-left: 8px;
-
-  &.mark-as {
-    width: 85px;
-  }
-}
-
-.dropdown {
-  position: relative;
-  display: inline-block;
-}
-
-.vue-dropdown-content {
-  display: block;
-  position: absolute;
-  width: max-content;
-  background-color: #f1f1f1;
-  min-width: 160px;
-  overflow: auto;
-  box-shadow: 0 8px 16px 0 rgba(0, 0, 0, 0.2);
-  z-index: 2;
-}
-
-.vue-dropdown-content a {
-  display: block;
-  padding: 12px 16px;
-  color: black;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.vue-dropdown-content a:hover {
-  background-color: #ddd;
-}
+.text-with-markup span[contenteditable="plaintext-only"]:empty { padding: 4px 16px; }
+.input-section { display: flex; align-items: center; }
+.mark-as { width: 85px; margin-left: 8px; }
 </style>

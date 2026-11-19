@@ -6,7 +6,7 @@
       {{ registering ? 'create a new account' : 'reset your password' }}.
    </div>
    <div v-if="failed" class="section message messageError" role="alert">
-      Incorrect e-mail.
+      Could not send the instructions. Check your e-mail address and try again.
    </div>
    <form v-if="!sent" class="section" @submit.prevent="submit">
       <div class="input-field">

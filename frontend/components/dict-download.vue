@@ -1,45 +1,33 @@
+<script setup lang="ts">
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { dictionaryDownloadUrl } from '../js/dictionary-files-api.ts'
+import DictNav from './dict-nav.vue'
+
+const route = useRoute()
+const clean = ref(false)
+const dictId = computed(() => typeof route.params.dictId === 'string' ? route.params.dictId : '')
+const downloadUrl = computed(() => dictId.value ? dictionaryDownloadUrl(dictId.value, clean.value) : undefined)
+
+watch(dictId, () => { clean.value = false })
+</script>
+
 <template>
-<dict-download>
-   <DictNav :links="[['download', 'download']]"/>
-   <h1>Download</h1>
-   <div class="input-field">
-      <a class="waves-effect waves-light btn btn-primary download-link"
-            target="_blank" rel="noopener"
-            :href="downloadUrl">
-         <i class="material-symbols-outlined left">file_download</i>
-         Download {{ activeDictionary.dictId }}.xml
-      </a>
-   </div>
-   <div>
+   <section>
+      <DictNav :links="[['download', 'Download']]"/>
+      <h1>Download</h1>
+      <div class="input-field">
+         <a class="waves-effect waves-light btn btn-primary download-link" target="_blank" rel="noopener" :href="downloadUrl">
+            <i class="material-symbols-outlined left" aria-hidden="true">file_download</i>
+            Download {{ dictId }}.xml
+         </a>
+      </div>
       <label>
-         <input type="checkbox"
-               class="noAttributes"
-               name="noAttributes" v-model="clean"/>
+         <input v-model="clean" type="checkbox" class="noAttributes" name="noAttributes">
          <span>XML without Lexonomy attributes</span>
       </label>
-   </div>
-   <small class="helper-text">
-      If you want to import the XML file back to Lexonomy, you need Lexonomy attributes.
-   </small>
-</dict-download>
+      <small class="helper-text">
+         If you want to import the XML file back to Lexonomy, you need Lexonomy attributes.
+      </small>
+   </section>
 </template>
-
-<script>
-import { activeDictionary } from '../js/dictionary-workspace.ts'
-import DictNav from './dict-nav.vue'
-import { basePath } from '../js/api.ts'
-
-export default {
-   setup: () => ({ activeDictionary }),
-   components: { DictNav },
-   data() {
-      return { clean: false }
-   },
-
-   computed: {
-      downloadUrl() {
-         return `${basePath}${encodeURIComponent(this.activeDictionary.dictId)}/download.xml${this.clean ? '?clean=true' : ''}`
-      }
-   }
-}
-</script>

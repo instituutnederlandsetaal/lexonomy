@@ -1,12 +1,13 @@
 #!/usr/bin/python3
 
 from collections import defaultdict
+from contextlib import ExitStack, closing
 import datetime
 import itertools
 import json
 import os
 import os.path
-from pyexpat import ParserCreate
+from pyexpat import ExpatError, ParserCreate
 import sqlite3
 from sqlite3 import Connection
 import hashlib
@@ -16,7 +17,7 @@ import smtplib, ssl
 from email.message import EmailMessage
 from typing import Any, Callable, Iterable, List, Literal, Optional, Tuple, TypedDict, Union, Set
 from typing_extensions import NotRequired
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, CData, Comment, NavigableString, Tag
 import shutil
 import markdown
 import re
@@ -87,8 +88,8 @@ class ConfigFlagging(TypedDict):
     flags: list[ConfigFlaggingEntry]
 
 class ConfigXemaElementChild(TypedDict):
-    min: int
-    max: Optional[int]
+    min: int | str
+    max: int | str | None
     name: str
     """An ID in xema["elements"] where the child info is held."""
 
@@ -99,10 +100,10 @@ class ConfigXemaAttributeValue(TypedDict):
 class ConfigXemaAttribute(TypedDict):
     optionality: Literal["optional", "obligatory"]
     filling: Literal["txt", "lst"]
-    values: Optional[List[ConfigXemaAttributeValue]]
+    values: NotRequired[list[ConfigXemaAttributeValue] | None]
 
 class ConfigXemaElement(TypedDict):
-    elementName: Optional[str]
+    elementName: NotRequired[str | None]
     """When supplied, use this as xml tag instead of the key in the xema["elements"].
         This can be useful when the xml contains elements with the same name that require a different configuration.
 
@@ -117,15 +118,19 @@ class ConfigXemaElement(TypedDict):
         But now how to know which ID matches with an element, since multiple configured elements can set the same elementName?
         Check the parent. Only one of a parent children (i.e. siblings) should ever have a given elementName.
      """
-    filling: Literal["inl", "txt", "chd", "emp"]
-    values: List[str]
-    children: List[ConfigXemaElementChild]
-    attributes: dict[str, ConfigXemaAttribute]
+    filling: NotRequired[Literal["inl", "txt", "chd", "emp", "lst", "med"]]
+    values: NotRequired[list[ConfigXemaAttributeValue]]
+    children: NotRequired[list[ConfigXemaElementChild]]
+    attributes: NotRequired[dict[str, ConfigXemaAttribute]]
 
 
 class ConfigXema(TypedDict):
     root: str
     elements: dict[str, ConfigXemaElement]
+    _dtd: NotRequired[str]
+    _newXml: NotRequired[str]
+    _xonomyDocSpec: NotRequired[str]
+    newXml: NotRequired[str]
 
 # Keys are duplicated in the entry, using the linkElement property: so { "entry": {"linkElement": "entry", ...etc} }
 ConfigLinks = dict[str, ConfigLinksEntry]
@@ -272,6 +277,7 @@ class HistoryEntry(EntryRendering):
     email: str
     "Can be empty"
     historiography: Historiography
+    schemaId: NotRequired[str]
 
 class RelatedEntry(TypedDict):
     "Related entry in dictionary - parent- or child/sub-entry "
@@ -294,10 +300,12 @@ class EntryFromDatabase(TypedDict):
     content: NotRequired[str]
     tag: NotRequired[Tag]
     titlePlain: NotRequired[str]
+    schemaId: NotRequired[str]
 
 class User(TypedDict):
     email: str
     loggedin: bool
+    isAdmin: NotRequired[bool]
 
 siteconfig = load_siteconfig()
 for datadir in ["dicts", "uploads", "sqlite_tmp"]:
@@ -324,7 +332,12 @@ defaultDictConfig = {
     }
 }
 
-prohibitedDictIDs = ["login", "logout", "make", "signup", "forgotpwd", "changepwd", "users", "dicts", "oneclick", "recoverpwd", "createaccount", "consent", "userprofile", "dictionaries", "about", "list", "lemma", "json", "ontolex", "tei", ""]
+prohibitedDictIDs = {
+    "login", "logout", "make", "signup", "register", "forgot", "forgotpwd",
+    "changepwd", "users", "dicts", "oneclick", "recoverpwd", "createaccount",
+    "consent", "userprofile", "dictionaries", "opendictionaries", "about",
+    "list", "lemma", "json", "ontolex", "tei", "e404", "",
+}
 
 # db management
 def getDB(dictID: str) -> Connection:
@@ -411,17 +424,17 @@ def verifyLogin(email: str, sessionkey: str):
 def verifyLoginAndDictAccess(email: str, sessionkey: str, dictDB: Connection):
     ret = verifyLogin(email, sessionkey)
     configs = readDictConfigs(dictDB)
-    dictAccess = configs["users"].get(email)
+    dictAccess = configs["users"].get(ret["email"])
     if ret["loggedin"] == False or (not dictAccess and not ret["isAdmin"]):
         return ({
             "loggedin": ret["loggedin"], 
-            "email": email, 
+            "email": ret["email"] or "",
             "dictAccess": False, 
             "isAdmin": False
         }, configs)
-    ret["dictAccess"] = dictAccess or {}
+    ret["dictAccess"] = {}
     for r in ["canEdit", "canConfig", "canDownload", "canUpload"]:
-        ret[r] = ret.get("isAdmin") or (dictAccess and dictAccess[r])
+        ret[r] = bool(ret.get("isAdmin") or (dictAccess and dictAccess.get(r)))
         ret["dictAccess"][r] = ret[r]
     return ret, configs
 
@@ -444,25 +457,39 @@ def xema_get_id_from_element_name(xema: ConfigXema, elementName: str, parentElem
     # Since there mayb be multiple elements where this is true, use the parent to disambiguate (if supplied).
     parentElement: Optional[ConfigXemaElement] = xema["elements"].get(parentElementID) if parentElementID else None
     if parentElement:
-        for childConfig in parentElement["children"]:
+        for childConfig in parentElement.get("children", []):
             childElementID = childConfig["name"]
-            childElementName = xema["elements"].get(childElementID, {}).get("elementName") or childElementID # use name if supplied, ID becomes fallback name otherwise
+            childElementName = xema_get_element_name_from_id(xema, childElementID)
             if childElementName == elementName:
                 return childElementID
 
     # No parent supplied, or not found: return the root if it matches
     if root := xema.get("root"):
-        if xema["elements"].get(root, {}).get("elementName", root) == elementName:
+        if xema_get_element_name_from_id(xema, root) == elementName:
             return root
 
     # Root also didn't match: check all elements to see which it is (maybe an orphan element? (not the root, but no parent either.))
-    for thisElementID, thisElement in xema["elements"].items():
-        thisElementName = thisElement.get("elementName", thisElementID) # again, use name of this element if supplied in the config, use the ID otherwise
-        if thisElementName == elementName:
+    for thisElementID in xema["elements"]:
+        if xema_get_element_name_from_id(xema, thisElementID) == elementName:
             return thisElementID
 
     # Nothing in the entire Xema uses the requested elementName - so the config is technically in an invalid state. Use a sensible default I guess.
     return elementName
+
+XEMA_DEFINITION_ATTRIBUTE = "lxnm:definition"
+
+def entry_schema_id(configs: Configs, xml: Tag) -> str:
+    xema = configs["xema"]
+    definition = xml.get(XEMA_DEFINITION_ATTRIBUTE)
+    if isinstance(definition, str) and definition in configs["subbing"]:
+        if xema_get_element_name_from_id(xema, definition) == xml.name:
+            return definition
+    if xml.name != xema_get_element_name_from_id(xema, xema["root"]):
+        # Older stored subentries have no definition marker.
+        matches = [key for key in configs["subbing"] if xema_get_element_name_from_id(xema, key) == xml.name]
+        if len(matches) == 1:
+            return matches[0]
+    return xema_get_id_from_element_name(xema, xml.name)
 
 def parse(xml: str) -> Tag:
     """Parse the xml and return the entry its root node. Expects to be passed xml with a single root node."""
@@ -493,16 +520,34 @@ def parse(xml: str) -> Tag:
     b: Any = BeautifulSoup()
 
     p = ParserCreate("utf-8")
+    p.buffer_text = True
+    in_cdata = False
+
     def start_element(name: str, attrs: Any):
         b.handle_starttag(name, attrs=attrs, nsprefix=None, namespace=None, sourceline=p.CurrentLineNumber, sourcepos=p.CurrentColumnNumber)
+
     def end_element(name: str):
         b.handle_endtag(name)
+
     def char_data(data: str):
-        b.handle_data(data)
+        if b.currentTag is not b:
+            b.object_was_parsed(CData(data) if in_cdata else NavigableString(data))
+
+    def cdata(active: bool):
+        nonlocal in_cdata
+        in_cdata = active
+
+    def comment(data: str):
+        if b.currentTag is not b:
+            b.object_was_parsed(Comment(data))
+
     p.StartElementHandler = start_element
     p.EndElementHandler = end_element
     p.CharacterDataHandler = char_data
-    p.Parse(xml)
+    p.StartCdataSectionHandler = lambda: cdata(True)
+    p.EndCdataSectionHandler = lambda: cdata(False)
+    p.CommentHandler = comment
+    p.Parse(xml, True)
     return list(b.children)[0]
 
 def doSql(db: Connection, sql: str, param: Any = None):
@@ -522,7 +567,7 @@ def deleteEntry(dictDB: Connection, configs: Configs, id: int, email: Optional[s
         parentId = parent["id"]
         for reference in parentXml.find_all("lxnm:subentryParent", attrs={"id": id}):
             reference.decompose() # removes the element
-        createEntry(dictDB, configs, parentXml, email="system@lexonomy", id=parentId) # annnd - update! Going through the whole process ensures that we always run all relevant code, even when more is added in the future.
+        createEntry(dictDB, configs, parentXml, email="system@lexonomy", id=parentId, commit=False)
 
     # tell history that I have been deleted:
     dictDB.execute("insert into history(entry_id, action, [when], email, xml) values(?,?,?,?,?)",
@@ -539,27 +584,33 @@ def get_xslt_transformer(xsl: Optional[str]) -> Callable[[str], Optional[str]]:
     """
     import lxml.etree as ET
 
-    def no_op(xml: str): # match arguments with actual transform function.
-        pass
+    def no_op(xml: str) -> None:
+        return None
 
-    if xsl:
-        try:
-            xsl_dom = ET.XML(xsl.encode())
-            xslt = ET.XSLT(xsl_dom)
-        except:
-            return no_op
-    else:
+    if not xsl:
+        return no_op
+
+    class NoExternalDocuments(ET.Resolver):
+        def resolve(self, url, public_id, context):
+            raise OSError("Stylesheets cannot load external resources")
+
+    parser = ET.XMLParser(resolve_entities=False, load_dtd=False, no_network=True)
+    parser.resolvers.add(NoExternalDocuments())
+    try:
+        xsl_dom = ET.XML(xsl.encode(), parser=parser)
+        xslt = ET.XSLT(xsl_dom, access_control=ET.XSLTAccessControl.DENY_ALL)
+    except (ET.LxmlError, OSError, ValueError):
         return no_op
 
     def run_xslt(xml: str) -> Optional[str]:
         """Run the xslt if possible, otherwise return None"""
         try:
-            xml_dom = ET.XML(xml)
+            xml_dom = ET.XML(xml, parser=parser)
             html_dom = xslt(xml_dom)
             html_string = ET.tostring(html_dom, xml_declaration=False, encoding="utf-8").decode("utf-8")
             return html_string
-        except:
-            return
+        except (ET.LxmlError, OSError, ValueError):
+            return None
     return run_xslt
 
 class SortableEntry(TypedDict):
@@ -737,15 +788,16 @@ def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int],
             ret["content"] = row["xml"]
         if tag or titlePlain:
             parsedXml = parse(row["xml"])
+            ret["schemaId"] = entry_schema_id(configs, parsedXml)
             if tag:
                 ret["tag"] = parsedXml
             if titlePlain:
-                ret["titlePlain"] = get_entry_title(parsedXml, configs, xema_element_id=xema_get_id_from_element_name(configs["xema"], row["doctype"]))[0]
+                ret["titlePlain"] = get_entry_title(parsedXml, configs, xema_element_id=ret["schemaId"])[0]
         entries.append(ret)
     sortEntries(configs, entries, sortdesc)  # type: ignore - SortableEntry is a subset of Entry so this always works
     return entries
 
-def get_entry_rendering(dictDB: Connection, xml: str, run_xslt: Callable[[str], Optional[str]]) -> EntryRendering:
+def get_entry_rendering(dictDB: Connection, xml: str | Tag, run_xslt: Callable[[str], Optional[str]]) -> EntryRendering:
     xml = str(resolveSubentries(dictDB, xml))
     html = run_xslt(xml)
     return {"contentHtml": html} if html else {"resolvedXml": xml}
@@ -796,21 +848,18 @@ def get_entry_id(xml: Tag, dictDB: Connection, maybeID: Optional[int] = None) ->
     return id, isNewEntry
 
 def is_subentry(config: ConfigSubbing, el: Tag, element_id: str) -> bool:
-    """Return True if this element is a subentry, i.e. it's in the sub config, and it has the required attributes."""
-    if not el.name in config:
+    """Match the resolved schema definition and an optional attribute rule."""
+    rule = config.get(element_id)
+    if rule is None:
         return False
-    required_attributes = config.get(element_id, {}).get("attributes", {}).items()
-    if not(len(required_attributes)):
-        return True # no attributes required - always good.
-    # Find a matching attribute
-    for name, requiredValue in required_attributes:
-        if el.has_attr(name) and (not requiredValue or el.attrs.get(name) == requiredValue):
-            return True
-    # No matching attribute found, element has the correct <name>, but not the correct attributes.
-    return False
+    required_attributes = rule.get("attributes") or {}
+    return not required_attributes or any(
+        el.has_attr(name) and (not value or el.attrs.get(name) == value)
+        for name, value in required_attributes.items()
+    )
 
 
-def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entryID: int, email: str):
+def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entryID: int, email: str, definition_id: str):
     """
     Ensure this entry has all subentries properly extracted and referenced through xml and database.
     Also flag any parent entries for needs_update.
@@ -836,87 +885,65 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
     """
 
     config = configs["subbing"]
-    def turnChildElementIntoSubentry(parentEntry: Tag, subentry: Tag, xema_element_id: str) -> int:
-        """
-            Save the child in the database, giving it an ID automatically.
-            Then in the parent, replace the child xml with <lxnm:subentryParent id=${childID}/> and store the link between parent and child in the sub database.
-            NOTE: the link is not registered in the database 'sub' table yet - that happens in a batch operation
-        """
-        subentryID, subentryXml, _, _ = createEntry(dictDB, configs, subentry, email)
-        if subentryXml:
-            subentryDoctype = get_entry_doctype(subentryXml)
-            subentryTitlePlain = get_entry_title(subentryXml, configs, xema_element_id=xema_element_id)[0]
-            new_tag = BeautifulSoup().new_tag("lxnm:subentryParent", attrs={
-                "id": str(subentryID),
-                "title": subentryTitlePlain,
-                "doctype": subentryDoctype
-            })
-            subentry.replaceWith(new_tag)
-        return subentryID
+    xema = configs["xema"]
+    extracted: list[tuple[Tag, str]] = []
+    existing: dict[int, list[tuple[Tag, str]]] = defaultdict(list)
 
-    def isInsideOtherSubentry(el: Tag) -> bool:
-        ancestor = el
-        while (ancestor := ancestor.parent) != None and ancestor is not entryXml: # entry xml may not be root of doc, avoid looking at its parents (might happen in nested subentries)!
-            ancestor_id = xema_get_id_from_element_name(configs["xema"], ancestor.name)
-            if is_subentry(config, ancestor, ancestor_id):
-                return True
-        return False
-
-    # 1. Replace subentries with <subentryParent> placeholder/standin elements
-    # NOTE: gather first - then replace, as to avoid modifying the xml while we're iterating and throwing off BeautifulSoup
-    nodesToTurnIntoSubentries: List[Tuple[Tag, str]] = []
-    newSubentries: List[int] = []
-    for xema_element_id in config:
-        element_name = xema_get_element_name_from_id(configs["xema"], xema_element_id)
-        for subentryElement in entryXml.select(element_name):
-            if not isInsideOtherSubentry(subentryElement) and is_subentry(config, subentryElement, xema_element_id):
-                nodesToTurnIntoSubentries.append((subentryElement, xema_element_id))
-    for subentryElement, xema_element_id in nodesToTurnIntoSubentries:
-        subentryID = turnChildElementIntoSubentry(entryXml, subentryElement, xema_element_id)
-        newSubentries.append(subentryID)
-
-    # 2. Gather all subentry IDs for this entry, excluding ones we just created (those are guaranteed to be valid)
-    # So that we can validate them.
-    # Only do this after new subentries have been extracted, or this query would also match a subentry in a subentry
-    subentryIdsToValidate: Set[int] = set()
-    for subentry in entryXml.findAll("lxnm:subentryParent"):
-        subentryID = int(subentry.attrs["id"])
-        if not subentryID in newSubentries: # new subentries are guaranteed to be correct in the datbaase already.
-            subentryIdsToValidate.add(subentryID)
-
-    validSubentryIDs = set(newSubentries)
-    # 3 Replace invalid references with contents, delete if no contents in database.
-    if len(subentryIdsToValidate): # avoid running a query we know won't return anything
-        idplaceholder = ",".join("?" * len(subentryIdsToValidate))
-        for r in doSql(dictDB, f"select * from entries where id in ({idplaceholder})", list(subentryIdsToValidate)).fetchall():
-            # fixup subentry's xml before using it, if it needs it (maybe it has subentries of its own to do things with?)
-            if r["needs_update"]:
-                _, subentryXml, _, _ = createEntry(dictDB, configs, r["xml"], email, id=r["id"])
-            else:
-                subentryXml = parse(r["xml"])
-
-            subentryID = int(r["id"])
-            xema_element_id = xema_get_id_from_element_name(configs["xema"], r["doctype"])
-            isValid = is_subentry(config, subentryXml, xema_element_id)
-            if isValid: # this <lxnm:subentryParent> may stay, but update its attributes anyway while we're here, so we're sure they are up to date.
-                for subentry in entryXml.findAll("lxnm:subentryParent", {"id": subentryID}): # and place xml content in the parent entry
-                    subentry.attrs["title"] = get_entry_title(subentryXml, configs, xema_element_id=xema_element_id)[0]
-                    subentry.attrs["doctype"] = r["doctype"]
-                subentryIdsToValidate.remove(subentryID) # mark this one done.
-                validSubentryIDs.add(subentryID)
+    def collect(node, parent_id):
+        for child in node.find_all(recursive=False):
+            if child.name == "lxnm:subentryParent":
+                existing[int(child["id"])].append((child, parent_id))
                 continue
+            child_id = xema_get_id_from_element_name(xema, child.name, parent_id)
+            if is_subentry(config, child, child_id):
+                extracted.append((child, child_id))
             else:
-                del subentryXml.attrs["lxnm:id"] # remove lexonomy attributes since this is no longer a full entry now
-                del subentryXml.attrs["xmlns:lxnm"]
-                for subentry in entryXml.findAll("lxnm:subentryParent", {"id": subentryID}): # and place xml content in the parent entry
-                    subentry.replaceWith(subentryXml)
+                collect(child, child_id)
 
-            subentryIdsToValidate.remove(subentryID) # mark this one done.
+    collect(entryXml, definition_id)
+    validSubentryIDs: set[int] = set()
+    for child, child_id in extracted:
+        subentry_id, subentry, success, _ = createEntry(
+            dictDB, configs, child, email, commit=False, xema_element_id=child_id)
+        if success:
+            title = get_entry_title(subentry, configs, xema_element_id=child_id)[0]
+            marker = BeautifulSoup().new_tag("lxnm:subentryParent", attrs={
+                "id": str(subentry_id), "title": title, "doctype": get_entry_doctype(subentry)
+            })
+            child.replace_with(marker)
+            validSubentryIDs.add(subentry_id)
 
-        # Every ID we've not see so far has no backing entry in the database - so just remove it outright.
-        for subentryID in subentryIdsToValidate:
-            for subentry in entryXml.findAll("lxnm:subentryParent", {"id": subentryID}):
-                subentry.decompose()
+    if existing:
+        placeholders = ",".join("?" for _ in existing)
+        rows = dictDB.execute(f"select * from entries where id in ({placeholders})", list(existing)).fetchall()
+        for row in rows:
+            subentry_id = row["id"]
+            doctype = row["doctype"]
+            references = existing.pop(subentry_id)
+            child = parse(row["xml"])
+            stored_definition = child.get(XEMA_DEFINITION_ATTRIBUTE)
+            if stored_definition not in config or xema_get_element_name_from_id(xema, stored_definition) != doctype:
+                stored_definition = None
+            if row["needs_update"]:
+                child_id = stored_definition or xema_get_id_from_element_name(xema, doctype, references[0][1])
+                _, child, _, _ = createEntry(dictDB, configs, row["xml"], email, id=subentry_id,
+                                              commit=False, xema_element_id=child_id)
+
+            for marker, parent_id in references:
+                child_id = xema_get_id_from_element_name(xema, doctype, parent_id)
+                if (stored_definition is None or stored_definition == child_id) and is_subentry(config, child, child_id):
+                    marker["title"] = get_entry_title(child, configs, xema_element_id=child_id)[0]
+                    marker["doctype"] = doctype
+                    validSubentryIDs.add(subentry_id)
+                else:
+                    inline = parse(str(child))
+                    inline.attrs.pop("lxnm:id", None)
+                    inline.attrs.pop("xmlns:lxnm", None)
+                    inline.attrs.pop(XEMA_DEFINITION_ATTRIBUTE, None)
+                    marker.replace_with(inline)
+        for references in existing.values():
+            for marker, _ in references:
+                marker.decompose()
 
     # 4 Update subentry relations database.
     doSql(dictDB, "delete from sub where parent_id = ?", (entryID, ))
@@ -985,7 +1012,7 @@ def get_entry_title(xml: Tag, configs: Configs, xema_element_id: str) -> Tuple[s
     Since subentries have a different schema from the main entry, they may have a different headword element and thus a different title.
     """
     # If this is a subentry and a titling config is present for this subentry type, use it
-    if xema_element_id and (headword_xema_id := configs["subbing"].get(xema_element_id, {}).get("titling", {}).get("headword")):
+    if xema_element_id and (headword_xema_id := (configs["subbing"].get(xema_element_id, {}).get("titling") or {}).get("headword")):
         headword_element_name = xema_get_element_name_from_id(configs["xema"], headword_xema_id)
         if headword_element_name and (val := get_text(xml, headword_element_name)):
             headword = val[0:255]
@@ -1027,10 +1054,11 @@ def get_entry_sortkey(xml: Tag, configs: Configs) -> str:
     - a placeholder string
     """
     config = configs["titling"]
-    if config.get("headwordSorting") and (val := get_text(xml, config["headwordSorting"])):
-        return val
-    else:
-        return get_entry_headword(xml, configs)
+    if definition := config.get("headwordSorting"):
+        name = xema_get_element_name_from_id(configs["xema"], definition)
+        if val := get_text(xml, name):
+            return val
+    return get_entry_headword(xml, configs)
 
 def get_entry_flag(xml: Union[str, Tag], configs: Configs) -> Optional[str]:
     """Read the flag from an entry, assumes the xml is from the database, and not from the user (and so has no unexpected issues)."""
@@ -1049,16 +1077,22 @@ def find_path_to_element(xema: ConfigXema, current_element_id: str, target_eleme
     The initial starting point element is NOT returned in the list.
     If any of the encountered elements have no config in the xema it is not considered further.
     """
-    if elementConfig := xema["elements"].get(current_element_id): # if element has a definition in xema, check the children
-        for c in elementConfig.get("children", []):
-            child_id = c["name"] # confusing, but alas.. the child.name property is the key in the xema.elements object, so it is actually the ID of the child.
-            child_name= xema_get_element_name_from_id(xema, c["name"])
+    seen = set()
+
+    def walk(element_id):
+        if element_id in seen:
+            return None
+        seen.add(element_id)
+        for child in xema["elements"].get(element_id, {}).get("children", []):
+            child_id = child["name"]
+            name = xema_get_element_name_from_id(xema, child_id)
             if child_id == target_element_id:
-                return [child_name]
-            elif path_to_target := find_path_to_element(xema, child_id, target_element_id):
-                return [child_name] + path_to_target
-            # doesn't lead to target, next child
-        # nothing leads to target - dead-end.
+                return [name]
+            if rest := walk(child_id):
+                return [name, *rest]
+        return None
+
+    return walk(current_element_id)
 
 def create_path_to_element(xml: Tag, path: list[str]) -> Tag:
     """
@@ -1371,7 +1405,8 @@ def presave_autonumbering(dictDB: Connection, configs: Configs, entry: Tag, isAu
 
     return touched_entry
 
-def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], email: str, id: Optional[int] = None) -> Union[
+def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], email: str, id: Optional[int] = None,
+                *, commit: bool = True, xema_element_id: Optional[str] = None) -> Union[
     Tuple[int, Tag, Literal[True], Optional[Any]],
     Tuple[Optional[int], Optional[Tag], Literal[False], Any]
 ]:
@@ -1392,11 +1427,21 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
 
     # Specific order: reserve ID in the database, then extract subentries
     # So that any element matching after this does not go into subentries
-    id, isNewEntry = get_entry_id(xml, dictDB, id)
-    presave_subentries(dictDB, configs, xml, id, email)
-
     doctype = get_entry_doctype(xml)
-    titleText, titleHtml = get_entry_title(xml, configs, xema_get_id_from_element_name(configs["xema"], doctype))
+    definition_id = xema_element_id or entry_schema_id(configs, xml)
+    id, isNewEntry = get_entry_id(xml, dictDB, id)
+    if not isNewEntry and not xema_element_id and XEMA_DEFINITION_ATTRIBUTE not in xml.attrs:
+        old_xml = dictDB.execute("select xml from entries where id=?", (id,)).fetchone()["xml"]
+        if old_xml and XEMA_DEFINITION_ATTRIBUTE in old_xml:
+            old_entry = parse(old_xml)
+            if old_entry.name == doctype:
+                definition_id = entry_schema_id(configs, old_entry)
+    if definition_id != doctype and definition_id in configs["subbing"]:
+        xml[XEMA_DEFINITION_ATTRIBUTE] = definition_id
+    else:
+        xml.attrs.pop(XEMA_DEFINITION_ATTRIBUTE, None)
+    presave_subentries(dictDB, configs, xml, id, email, definition_id)
+    titleText, titleHtml = get_entry_title(xml, configs, definition_id)
     sortKey = get_entry_sortkey(xml, configs)
     flag = get_entry_flag(xml, configs)
 
@@ -1411,14 +1456,15 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
 
     # Report if headword exists.
     c = dictDB.execute("select id from entries where title = ? and id <> ?", (titleText, id))
-    dictDB.commit()
+    if commit:
+        dictDB.commit()
     r = c.fetchone()
     feedback = {"type": "saveFeedbackHeadwordExists", "info": r["id"]} if r else None
 
     return id, xml, True, feedback
 
 def generateKey(size: int=32):
-    return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(size))
+    return ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(size))
 
 def generateDictId(size: int=8):
     return ''.join(random.choice("abcdefghijkmnpqrstuvwxy23456789") for _ in range(size))
@@ -1434,7 +1480,7 @@ def login(email: str, password: str):
             return {"success": False}
         key = generateKey()
         now = datetime.datetime.utcnow()
-        conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, email))
+        conn.execute("update users set sessionKey=?, sessionLast=? where email=?", (key, now, user["email"]))
         conn.commit()
         return {"success": True, "email": user["email"], "key": key, "consent": user["consent"] == 1}
 
@@ -1850,54 +1896,47 @@ def exportEntryXml(dictDB: Connection, dictID: str, entryID: int, configs: Confi
     else:
         return {"entryID": 0, "xml": ""}
 
-def resolveSubentries(dictDB: Connection, xml: Union[str, Tag]) -> Tag:
+def resolveSubentries(dictDB: Connection, xml: str | Tag, ancestors: frozenset[int] = frozenset()) -> Tag:
     "Recursively replace subentry references (<lxnm:subentryParent>) with their contents."
     if type(xml) is str:
         xml = parse(xml)
     subs = xml.find_all("lxnm:subentryParent")
     for sub in subs:
         subentryID = int(sub.attrs["id"])
+        if subentryID in ancestors:
+            continue
         r = dictDB.execute("select * from entries where id = ?", (subentryID, )).fetchone()
-        sub.replace_with(resolveSubentries(dictDB, r["xml"]))
+        if r:
+            sub.replace_with(resolveSubentries(dictDB, r["xml"], ancestors | {subentryID}))
 
     return xml
 
 def export(dictID: str, dictDB: Connection, configs: Configs, clean: bool = True) -> Iterable[str]:
     "Export all entries, (optionally) cleaning all lexonomy things."
-    def prepare_for_export(xml: str) -> Tag:
-        """Pre-process the xml to replace subentry references with their contents, and optionally remove all lexonomy bookkeeping.
-            Return tag so we don't stringify and re-parse subentries.
-        """
-        tag = parse(xml)
-        # Note: first search, THEN modify - don't modify while iterating.
-        # 1. subentries - replace with their contents.
-        subs = tag.find_all("lxnm:subentryParent")
-        for sub in subs:
-            subentryID = int(sub.attrs["id"])
-            r = dictDB.execute("select * from entries where id = ?", (subentryID, )).fetchone()
-            sub.replace_with(prepare_for_export(r["xml"]))
-        if clean:
-            # 2. linkables - remove the attribute
-            for linkable in tag.find_all(attrs = {"lxnm:linkable": True}):
-                del linkable.attrs["lxnm:linkable"]
-            # 3. flags - remove if we shouldn't keep them
-            if configs["flagging"]["flag_element"]:
-                flags = tag.find_all(configs["flagging"]["flag_element"])
-                for flag in flags:
-                    flag.decompose()
-            # 4. other bookkeeping attributes at the root - remove them.
-            del tag.attrs["lxnm:id"]
-            del tag.attrs["xmlns:lxnm"]
-        return tag
-
-    rootname = dictID.lstrip(" 0123456789") or "lexonomy"
+    rootname = re.sub(r"\s+", "-", dictID).lstrip("0123456789-") or "lexonomy"
+    try:
+        ParserCreate().Parse(f"<{rootname}/>", True)
+    except ExpatError:
+        rootname = "lexonomy"
     run_xslt = get_xslt_transformer(configs.get("download", {}).get("xslt", ""))
+    flag_id = configs["flagging"].get("flag_element")
+    flag_name = xema_get_element_name_from_id(configs["xema"], flag_id) if flag_id else None
 
     yield "<"+rootname+">\n"
-    for r in dictDB.execute("SELECT * FROM entries").fetchall():
-        result = prepare_for_export(r["xml"]).prettify()
-        result = run_xslt(result) or re.sub("><",">\n<",result)
-        yield result
+    for row in dictDB.execute("SELECT id, xml FROM entries"):
+        tag = resolveSubentries(dictDB, row["xml"], frozenset({row["id"]}))
+        if clean:
+            for node in tag.find_all("lxnm:subentryParent"):
+                node.decompose()
+            if flag_name:
+                for node in tag.find_all(flag_name):
+                    node.decompose()
+            for node in [tag, *tag.find_all(True)]:
+                for attribute in list(node.attrs):
+                    if attribute.startswith("lxnm:") or attribute == "xmlns:lxnm":
+                        del node.attrs[attribute]
+        xml = str(tag)
+        yield run_xslt(xml) or xml
         yield "\n"
     yield "</"+rootname+">\n"
 
@@ -1926,20 +1965,23 @@ def readNabesByEntryID(dictDB: Connection, dictID: str, entryID: int, configs: C
 def readRandoms(dictDB: Connection):
     configs = readDictConfigs(dictDB)
     limit = 75
-
-    c = dictDB.execute("select id, sortkey from entries where doctype=? order by random() limit ?", (configs["xema"]["root"], limit))
+    xema = configs["xema"]
+    doctype = xema_get_element_name_from_id(xema, xema["root"])
+    c = dictDB.execute("select id, sortkey from entries where doctype=? order by random() limit ?", (doctype, limit))
     ids_and_sortkeys: List[SortableEntry] = []
     for r in c.fetchall():
         ids_and_sortkeys.append({"id": r["id"], "sortkey": r["sortkey"]})
 
     return {
         "entries": readEntries(dictDB, configs, ids_and_sortkeys, titlePlain=True),
-        "more": dictDB.execute("select count(*) as total from entries").fetchone()["total"] > limit
+        "more": dictDB.execute("select count(*) as total from entries where doctype=?", (doctype,)).fetchone()["total"] > limit
     }
 
-def readRandomOne(dictDB: Connection, dictID: str, configs: Configs) -> EntryFromDatabase:
-    id = dictDB.execute("select id from entries where doctype=? order by random() limit 1", (configs["xema"]["root"], )).fetchone()["id"]
-    entries = readEntries(dictDB, configs, id, xml = True)
+def readRandomOne(dictDB: Connection, configs: Configs) -> EntryFromDatabase:
+    xema = configs["xema"]
+    doctype = xema_get_element_name_from_id(xema, xema["root"])
+    row = dictDB.execute("select id from entries where doctype=? order by random() limit 1", (doctype,)).fetchone()
+    entries = readEntries(dictDB, configs, row["id"], xml=True) if row else []
     return entries[0] if len(entries) > 0 else {
         "flag": "",
         "id": 0,
@@ -1961,10 +2003,9 @@ def purge(dictDB: Connection, email: str, historiography: Historiography):
 
 def showImportErrors(filename: str, truncate: int):
     with open(filename+".err", "r") as content_file:
-        content = content_file.read()
-    if (truncate):
-        content = content[0:truncate].replace("<", "&lt;")
-        return {"errorData": content, "truncated": truncate}
+        content = content_file.read(truncate if truncate > 0 else -1)
+    if truncate > 0:
+        return {"errorData": content.replace("<", "&lt;"), "truncated": truncate}
     else:
         return content
 
@@ -1976,7 +2017,7 @@ class ExternalProcessStatus(TypedDict):
 def importfile(dictID: str, filepath: str, user: str, purge: bool = False, saveSurroundingContent: bool = False) -> ExternalProcessStatus:
     # TODO port to bgjob?
     dbpath = os.path.join(siteconfig["dataDir"], "dicts", dictID+".sqlite")
-    args: list[str] = []
+    args = ["--remove-upload"]
     if purge:
         args.append("-pp") # purge both entries AND history
     if saveSurroundingContent:
@@ -1987,24 +2028,37 @@ def importfile(dictID: str, filepath: str, user: str, purge: bool = False, saveS
     args.append(filepath)
     return _startSubprocess(subProcessID = filepath, scriptPath = os.path.join(API_DIR, "adminscripts", "import.py"), args = args)
 
+def getImportStatus(filepath: str) -> ExternalProcessStatus:
+    return _getProcessStatus(filepath + ".pid", filepath + ".err")
+
 def _startSubprocess(subProcessID: str, scriptPath: str, args: list[str]) -> ExternalProcessStatus:
     "Start the subprocess if it is not already running or finished. Return the status of the process if is was already running."
     import subprocess
     import sys
+    from threading import Thread
     pidfile = subProcessID + ".pid"
     errfile = subProcessID + ".err"
-    if os.path.isfile(pidfile + ".lock"):
+    lockfile = pidfile + ".lock"
+    try:
+        with open(lockfile, "x"):
+            pass
+    except FileExistsError:
         return _getProcessStatus(pidfile, errfile)
 
-    open(pidfile + ".lock", "w").close()
-    pidfile_f = open(pidfile, "w")
-    errfile_f = open(errfile, "w")
+    try:
+        with open(pidfile, "w") as stdout, open(errfile, "w") as stderr:
+            process = subprocess.Popen([sys.executable, scriptPath, *args], stdout=stdout, stderr=stderr,
+                                       start_new_session=True, close_fds=True)
+    except OSError:
+        os.unlink(lockfile)
+        raise
 
-    args = [sys.executable, scriptPath] + args # prepend executable.
-    p = subprocess.Popen(args, stdout=pidfile_f, stderr=errfile_f, start_new_session=True, close_fds=True)
-    # We can close these now, child process has a copy of the file descriptors.
-    pidfile_f.close()
-    errfile_f.close()
+    def record_failure():
+        if process.wait() and os.stat(errfile).st_size == 0:
+            with open(errfile, "w") as errors:
+                errors.write("The import process stopped before it finished.\n")
+
+    Thread(target=record_failure, daemon=True).start()
     return {
         "errors": False,
         "finished": False,
@@ -2033,11 +2087,7 @@ def _getProcessStatus(pidfile: str, errfile: str) -> ExternalProcessStatus:
         if lines:
             progress = lines[-1]
 
-    finished = "100%" in progress
-    if finished:
-        os.unlink(pidfile)
-        os.unlink(errfile)
-    
+    finished = bool(re.fullmatch(r"100% - [0-9]+ total entries imported\.", progress))
     return {"progressMessage": progress, "finished": finished, "errors": errors}
 
 def readDoctypesUsed(dictDB: Connection):
@@ -2091,24 +2141,19 @@ def flagForUpdate(dictDB: Connection) -> int:
     dictDB.commit()
     return (c.rowcount > 0)
 
-def getEntryLinks(dictDB: Connection, dictID: str, entryID: int):
+def getEntryLinks(dictDB: Connection, dictID: str, entryID: int, reader: User):
     ret = {"out": [], "in": []}
     cl = dictDB.execute("SELECT count(*) as count FROM sqlite_master WHERE type='table' and name='linkables'")
     rl = cl.fetchone()
     if rl['count'] > 0:
         c = dictDB.execute("SELECT * FROM linkables WHERE entry_id=?", (entryID,))
-        conn = getLinkDB()
         for r in c.fetchall():
-            lout = []
-            lin = []
-            for lr in links_get(dictID, r["element"], r["txt"], "", "", ""):
+            for lr in links_get(dictID, r["element"], r["txt"], "", "", "", reader):
                 lr['source_preview'] = r['preview']
-                lout.append(lr)
-            for lr in links_get("", "", "", dictID, r["element"], r["txt"]):
+                ret["out"].append(lr)
+            for lr in links_get("", "", "", dictID, r["element"], r["txt"], reader):
                 lr['target_preview'] = r['preview']
-                lin.append(lr)
-            ret["out"] = ret["out"] + lout
-            ret["in"] = ret["in"] + lin
+                ret["in"].append(lr)
     return ret
 
 def readDictHistory(dictDB: Connection, dictID: str, configs: Configs, entryID: int) -> List[HistoryEntry]:
@@ -2121,16 +2166,20 @@ def readDictHistory(dictDB: Connection, dictID: str, configs: Configs, entryID: 
         historiography = json.loads(row["historiography"] or "{}")
         if historiography.pop("apikey", None):
             historiography["viaApi"] = True
-        history.append({
+        revision: HistoryEntry = {
             "entry_id": row["entry_id"],
             "revision_id": row["id"],
             "content": xml or "",
-            **(get_entry_rendering(dictDB, xml, html_transformer) if xml else {}),
             "action": row["action"],
             "when": row["when"],
             "email": row["email"] or "",
             "historiography": historiography
-        })
+        }
+        if xml:
+            parsed = parse(xml)
+            revision["schemaId"] = entry_schema_id(configs, parsed)
+            revision.update(get_entry_rendering(dictDB, parsed, html_transformer))
+        history.append(revision)
     return history
 
 def links_add(source_dict: str, source_el: str, source_id: str, target_dict: str, target_el: str, target_id: str, confidence: float=0, conn: Optional[Connection]=None):
@@ -2155,118 +2204,113 @@ def links_delete(dictID: str, linkID: str):
     else:
         return True
 
-def links_get(source_dict: str, source_el: str, source_id: str, target_dict: str, target_el: str, target_id: str):
-    params: list[Any] = []
-    where: list[str] = []
-    if source_dict != "":
-        where.append("source_dict=?")
-        params.append(source_dict)
-    if source_el != "":
-        where.append("source_element=?")
-        params.append(source_el)
-    if source_id != "":
-        where.append("source_id=?")
-        params.append(source_id)
-    if target_dict != "":
-        where.append("target_dict=?")
-        params.append(target_dict)
-    if target_el != "":
-        where.append("target_element=?")
-        params.append(target_el)
-    if target_id != "":
-        where.append("target_id=?")
-        params.append(target_id)
-    query = "SELECT * FROM links"
-    if len(where) > 0:
-        query += " WHERE " + " AND ".join(where)
-    conn = getLinkDB()
-    c = conn.execute(query, tuple(params))
-    res = []
-    #first, get all dictionaries in results
-    dbs: dict[str, Connection] = {}
-    dbconfigs: dict[str, Configs] = {}
-    for row in c.fetchall():
-        if not row["source_dict"] in dbs:
-            dbs[row["source_dict"]] = getDB(row["source_dict"])
-            dbconfigs[row["source_dict"]] = readDictConfigs(dbs[row["source_dict"]])
-        if not row["target_dict"] in dbs:
-            try:
-                dbs[row["target_dict"]] = getDB(row["target_dict"])
-                dbconfigs[row["target_dict"]] = readDictConfigs(dbs[row["target_dict"]])
-            except:
-                dbconfigs[row["target_dict"]] = None
-    #now the actual results
-    c = conn.execute(query, tuple(params))
-    for row in c.fetchall():
-        sourceDB = dbs.get(row["source_dict"])
-        sourceConfig = dbconfigs[row["source_dict"]]
-        targetDB = dbs.get(row["target_dict"])
-        targetConfig = dbconfigs[row["target_dict"]]
-        source_entry = ""
-        source_hw = ""
-        source_doctype = ""
-        source_preview = ""
-        try:
-            # test if source DB has linkables tables
-            ress = sourceDB.execute("SELECT entry_id, preview FROM linkables WHERE txt=?", (row["source_id"],))
-            rows = ress.fetchone()
-            if rows:
-                source_entry = rows["entry_id"]
-                source_preview = ' '.join(rows["preview"].split()[:7])
-        except:
-            source_entry = ""
-        # fallback for ontolex ids
-        if source_entry == "" and re.match(r"^[0-9]+_[0-9]+$", row["source_id"]):
-            source_entry = row["source_id"].split("_")[0]
-        if source_entry != "":
-            record = readEntries(sourceDB, sourceConfig, int(source_entry), titlePlain=True)
-            if record:
-                source_hw = record[0].get("titlePlain", "")
-                source_doctype = record[0]["doctype"]
-        target_entry = ""
-        target_hw = ""
-        target_doctype = ""
-        target_preview = ""
-        try:
-            # test if target DB has linkables tables
-            rest = targetDB.execute("SELECT entry_id, preview FROM linkables WHERE txt=?", (row["target_id"],))
-            rowt = rest.fetchone()
-            if rowt:
-                target_entry = rowt["entry_id"]
-                target_preview = ' '.join(rowt["preview"].split()[:7])
-        except:
-            target_entry = ""
-        # fallback for ontolex ids and CILI
-        if target_entry == "" and re.match(r"^[0-9]+_[0-9]+$", row["target_id"]):
-            target_entry = row["target_id"].split("_")[0]
-        if target_entry != "":
-            record = readEntries(targetDB, targetConfig, int(target_entry), titlePlain=True)
-            if record:
-                target_hw = record[0].get("titlePlain", "")
-                target_doctype = record[0]["doctype"]
-        if target_dict == "CILI":
-            target_entry = row["target_id"]
-            target_hw = row["target_id"]
+def links_get(source_dict: str, source_el: str, source_id: str, target_dict: str, target_el: str, target_id: str, reader: User):
+    filters = {
+        "source_dict": source_dict, "source_element": source_el, "source_id": source_id,
+        "target_dict": target_dict, "target_element": target_el, "target_id": target_id,
+    }
+    where = {field: value for field, value in filters.items() if value}
+    clause = " AND ".join(field + "=?" for field in where)
+    links, _ = _read_links(reader, clause, tuple(where.values()))
+    return links
 
-        res.append({
-            "link_id": row["link_id"],
-            "source_dict": row["source_dict"],
-            "source_entry": str(source_entry),
-            "source_doctype": source_doctype,
-            "source_hw": source_hw,
-            "source_el": row["source_element"],
-            "source_id": row["source_id"],
-            "source_preview": source_preview,
-            "target_dict": row["target_dict"],
-            "target_entry": str(target_entry),
-            "target_doctype": target_doctype,
-            "target_hw": target_hw,
-            "target_el": row["target_element"],
-            "target_id": row["target_id"],
-            "target_preview": target_preview,
-            "confidence": row["confidence"]
-        })
-    return res
+
+def read_dictionary_links(dict_id: str, reader: User):
+    links, dictionaries = _read_links(reader, "source_dict=? OR target_dict=?", (dict_id, dict_id),
+                                      include_dictionaries=True)
+    return {
+        "links": {
+            "to": [link for link in links if link["source_dict"] == dict_id],
+            "from": [link for link in links if link["target_dict"] == dict_id],
+        },
+        "dictionaries": dictionaries,
+    }
+
+
+def _read_links(reader: User, where: str, params: tuple[str, ...], *, include_dictionaries: bool = False):
+    query = "SELECT * FROM links" + (" WHERE " + where if where else "")
+    with ExitStack() as connections:
+        links_db = connections.enter_context(closing(getLinkDB()))
+        readable = {}
+
+        def open_readable(dict_id):
+            if dict_id not in readable:
+                readable[dict_id] = None
+                try:
+                    db = connections.enter_context(closing(getDB(dict_id)))
+                except OSError:
+                    return None
+                configs = readDictConfigs(db)
+                if configs["publico"]["public"] or (
+                    reader["loggedin"] and (reader.get("isAdmin") or reader["email"] in configs["users"])
+                ):
+                    readable[dict_id] = (db, configs)
+            return readable[dict_id]
+
+        def entry_info(dictionary, element, link_id):
+            if dictionary is None:
+                return "", "", "", ""
+            db, configs = dictionary
+            entry_id = ""
+            preview = ""
+            try:
+                row = db.execute("SELECT entry_id, preview FROM linkables WHERE element=? AND txt=?",
+                                 (element, link_id)).fetchone()
+                if row:
+                    entry_id = str(row["entry_id"])
+                    preview = " ".join((row["preview"] or "").split()[:7])
+            except sqlite3.OperationalError:
+                pass  # Old dictionaries may not have the linkables table.
+            if not entry_id and re.fullmatch(r"[0-9]+_[0-9]+", link_id):
+                entry_id = link_id.split("_")[0]
+            records = readEntries(db, configs, int(entry_id), titlePlain=True) if entry_id else []
+            if records:
+                return entry_id, records[0].get("titlePlain", ""), preview, records[0]["doctype"]
+            return entry_id, "", preview, ""
+
+        results = []
+        dictionaries = {}
+        for row in links_db.execute(query, params):
+            source_dict_id, target_dict_id = row["source_dict"], row["target_dict"]
+            source = open_readable(source_dict_id)
+            target = open_readable(target_dict_id)
+            external = target is None and target_dict_id in {"BABELNET", "CILI"} and not dictExists(target_dict_id)
+            if source is None or (target is None and not external):
+                continue
+            if include_dictionaries:
+                for dict_id, dictionary in ((source_dict_id, source), (target_dict_id, target)):
+                    if dict_id in dictionaries:
+                        continue
+                    ident = dictionary[1]["ident"] if dictionary else {}
+                    dictionaries[dict_id] = {
+                        "title": ident.get("title", dict_id),
+                        "blurb": markdown_text(str(ident.get("blurb") or "")),
+                        "isExternal": dictionary is None,
+                    }
+            source_entry, source_hw, source_preview, source_doctype = entry_info(source, row["source_element"], row["source_id"])
+            target_entry, target_hw, target_preview, target_doctype = entry_info(target, row["target_element"], row["target_id"])
+            if external and row["target_dict"] == "CILI":
+                target_entry = target_hw = row["target_id"]
+            results.append({
+                "link_id": row["link_id"],
+                "source_dict": row["source_dict"],
+                "source_entry": source_entry,
+                "source_doctype": source_doctype,
+                "source_hw": source_hw,
+                "source_el": row["source_element"],
+                "source_id": row["source_id"],
+                "source_preview": source_preview,
+                "target_dict": row["target_dict"],
+                "target_entry": target_entry,
+                "target_doctype": target_doctype,
+                "target_hw": target_hw,
+                "target_el": row["target_element"],
+                "target_id": row["target_id"],
+                "target_preview": target_preview,
+                "confidence": row["confidence"],
+            })
+        return results, dictionaries
+
 
 def getDictLinkables(dictDB: Connection):
     ret = []
@@ -2301,7 +2345,7 @@ def addAutoNumbers(dictDB: Connection, configs: Configs, user: User):
 
 def notifyUsers(configOld: ConfigUsers, configNew: ConfigUsers, dictInfo: ConfigIdent, dictID: str):
     for user in configNew:
-        if not configOld[user]:
+        if not configOld.get(user):
             mailSubject = "Lexonomy, added to the dictionary"
             mailText = "Dear Lexonomy user,\n\n"
             mailText += "you are now able to access the following dictionary:\n"

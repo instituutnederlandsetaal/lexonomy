@@ -1,29 +1,20 @@
 <template>
   <div>
     <section v-if="elementData.shown">
-      <p v-if="showPreview" :class="computedClass">{{ showPreview ? computedElementNameWithColon : "" }} </p>
-      <span :class="computedClass"> {{ content.text }}</span>
+      <p v-if="showPreview" :class="textClass">{{ label }} </p>
+      <span :class="textClass"> {{ content.text }}</span>
     </section>
   </div>
 </template>
 
-<script>
-import computedElementName from "../../shared-resources/mixins/computedElementName.js"
-import showPreview from "../../shared-resources/mixins/showPreview.js"
+<script setup lang="ts">
+import { computed } from 'vue'
+import type { Element } from 'xml-js'
+import type { ElementDisplay } from '../../editor-schema.ts'
 
-export default {
-  name: "ReadOnlyComponent",
-  props: {
-    children: Array,
-    elementData: Object,
-    elementName: String,
-    content: {
-      type: [Object, Array],
-      required: true
-    }
-  },
-  mixins: [computedElementName, showPreview]
-}
+const props = defineProps<{ elementData: ElementDisplay; content: Element; showPreview?: boolean }>()
+const textClass = computed(() => props.showPreview ? 'text--xs' : 'text--md')
+const label = computed(() => props.elementData.hideElementName ? '' : props.elementData.editorLabel + ':')
 </script>
 
 <style lang="scss" scoped>

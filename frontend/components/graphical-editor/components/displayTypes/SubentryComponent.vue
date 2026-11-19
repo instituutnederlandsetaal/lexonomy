@@ -11,181 +11,139 @@
           :parentElementName="parentElementName"
           :numberOfElements="numberOfElements"
           :subentryElement="true"
-          @move-element-down="moveElementDown"
-          @move-element-up="moveElementUp"
-          @add-element="createSibling"
+          v-on="actions"
           @link-element="linkNewSubentry"
-          @select-new-parent="selectNewParent"
-          @clone-element="cloneElement"
-          @remove-element="deleteElement"
         />
 
-        <p @click="openSubentry">{{ computedElementNameWithColon }} {{ displayValue }}</p>
+        <RouterLink v-if="subentryLocation" :to="subentryLocation">{{ elementData.hideElementName ? "" : xmlName + ":" }} {{ displayValue }}</RouterLink>
       </section>
     </div>
 
     <SelectElementFromArray
       v-if="showSelectNewParent"
       v-model="showSelectNewParent"
-      :element-name="elementName"
+      :name="elementData.editorLabel"
       :possible-parent-elements="newPossibleParents"
-      :parentElementName="parentElementName"
       @selected-element="handleSelectedNewParent"
     />
     <PopupDisplay
       z-index="10"
       v-model="showSubentriesSearchPopup"
       :hideActions="true"
+      :title="`Link new ${xmlName}`"
       class="subentry-search-modal"
     >
-      <h2>Link new {{ elementName }}</h2>
+      <h2>Link new {{ xmlName }}</h2>
       <div class="search-box">
-        <input v-model="searchTerm" placeholder="Headword" type="text">
+        <input v-model="searchTerm" placeholder="Headword" aria-label="Headword" type="search" @keydown.enter.stop.prevent="getSubentries">
         <button @click="getSubentries">Search</button>
       </div>
-      <div v-if="!error" class="subenries">
-        <div v-for="(entry, i) in subentries" :key="entry.id + i" class="subentry" @click="toggleCheck(i)">
-          <input type="checkbox" :checked="entry.checked">
-          <span class="text--xs"
-                v-html="entry.title"
-                style="
-              font-size: 12px;
-              line-height: 16px"
-          />
-        </div>
-      </div>
-      <div v-else>
-        {{ errorMessage }}
+      <p v-if="searching" role="status">Searching…</p>
+      <p v-else-if="message" role="status">{{ message }}</p>
+      <div v-else class="subentries">
+        <label v-for="entry in subentries" :key="entry.id" class="subentry">
+          <input type="checkbox" v-model="entry.checked" :disabled="!entry.checked && selectedCount >= availableSlots">
+          <span class="text--xs"><RawHtml :content="entry.title"/></span>
+        </label>
       </div>
 
       <div class="actions">
         <button @click="showSubentriesSearchPopup = false">Cancel</button>
-        <button :disabled="!isAnySubentryChecked" @click="saveSelectedSubentries">Save
-          {{ subentries.filter(el => el.checked).length || "" }}
+        <button :disabled="!selectedCount || selectedCount > availableSlots" @click="saveSelectedSubentries">Save
+          {{ selectedCount || "" }}
         </button>
       </div>
     </PopupDisplay>
   </div>
 </template>
 
-<script>
-import { api } from '../../../../js/api.ts'
-import ActionButtons from "../ActionButtons.vue"
-import layoutElementMixin from "../../shared-resources/mixins/layoutElementMixin.js"
-import SelectElementFromArray from "../SelectElementFromArray.vue"
-import computedElementName from "../../shared-resources/mixins/computedElementName.js"
-import PopupDisplay from "../PopupDisplay.vue"
+<script setup lang="ts">
+import { computed, inject, onScopeDispose, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { editorContextKey, useEditorDraft } from '../../editor-context.ts'
+import { entryEditorApi, type RelatedEntry } from '../../../../js/entry-editor-api.ts'
+import { maximumChildCount, xmlElementName } from '../../../../js/xema.ts'
+import { valueDefinition } from '../../editor-schema.ts'
+import { useFieldActions, type EditorFieldProps, type EmitField } from '../../use-editor-field.ts'
+import RawHtml from '../../../raw-html.vue'
+import ActionButtons from '../ActionButtons.vue'
+import PopupDisplay from '../PopupDisplay.vue'
+import SelectElementFromArray from '../SelectElementFromArray.vue'
 
-export default {
-  inject: ['editorState'],
-  name: "SubentryComponent",
-  components: {
-    PopupDisplay,
-    ActionButtons,
-    SelectElementFromArray
-  },
-  mixins: [
-    layoutElementMixin,
-    computedElementName
-  ],
-  emits: ['input', 'move-element', 'create-element', 'delete-element', 'clone-element'],
-  props: {
-    children: Array,
-    elementData: Object,
-    elementName: String,
-    parentElementName: String,
-    numberOfElements: Number,
-    content: {
-      type: [Object, Array],
-      required: true
-    },
-    editorChildNumber: Number,
-    isAttribute: Boolean,
-    showElementsPreview: {
-      type: Boolean,
-      default: false
-    }
-  },
-  watch: {
-    "editorState.headwordData": {
-      handler(headoword) {
-        this.searchTerm = headoword
-      },
-      immediate: true
-    }
-  },
-  computed: {
-    displayValue() {
-      let structureConfig = this.editorState.entry.dictConfigs.xema.elements[this.elementName]
-      if (!structureConfig) {
-        let parentConfig = this.editorState.entry.dictConfigs.xema.elements[this.parentElementName].attributes || {}
-        structureConfig = parentConfig[this.elementName]
-      }
-      const title = this.calculatedContent?.attributes?.title
-      return structureConfig?.values?.find(el => el.value === title)?.caption ?? title ?? ''
-    },
-    isAnySubentryChecked() {
-      return this.subentries.some(entry => entry.checked)
-    },
-  },
-  data() {
-    return {
-      updatedContent: null,
-      showSubentriesSearchPopup: false,
-      searchTerm: "",
-      subentries: [],
-      error: false,
-      errorMessage: ""
-    }
-  },
-  methods: {
-    openSubentry() {
-      const entryId = this.content.attributes?.id
-      if (entryId) this.$router.push({ name: 'edit', params: {
-        dictId: this.editorState.entry.dictId, doctype: this.elementName, entryId, mode: 'edit'
-      }, query: this.$route.query })
-    },
-    linkNewSubentry() {
-      this.showSubentriesSearchPopup = true
-      this.getSubentries()
-    },
-    async getSubentries() {
-      const request = api.get(`${encodeURIComponent(this.editorState.entry.dictId)}/subget/`, {
-        lemma: this.searchTerm,
-        doctype: this.elementName
-      })
-      this.subentryRequest = request
-      this.subentries = []
-      try {
-        const { entries = [] } = await request
-        if (this.subentryRequest !== request) return
-        this.subentries = entries.map(entry => ({ ...entry, checked: false }))
-        this.error = !entries.length
-        this.errorMessage = "No results found."
-      } catch {
-        if (this.subentryRequest !== request) return
-        this.error = true
-        this.errorMessage = "Could not search subentries."
-      }
-    },
-    toggleCheck(index) {
-      this.subentries[index].checked = !this.subentries[index].checked
-    },
-    saveSelectedSubentries() {
-      let selectedSubentries = this.subentries.filter(el => el.checked)
-      for (const entry of selectedSubentries) {
-        let newObject = this.createElementTemplate("lxnm:subentryParent")
-        newObject.attributes = {
-          doctype: entry.doctype,
-          id: entry.id,
-          title: entry.sortkey
-        }
-        this.$emit("create-element", {name: entry.doctype, content: newObject})
-      }
-      this.showSubentriesSearchPopup = false
+const props = defineProps<EditorFieldProps>()
+const emit = defineEmits<EmitField>()
+const { actions, newPossibleParents, showSelectNewParent, handleSelectedNewParent } = useFieldActions(props, emit)
+const editor = inject(editorContextKey)!
+const draft = useEditorDraft()
+const route = useRoute()
+const xema = computed(() => editor.config.xema)
+const xmlName = computed(() => xmlElementName(xema.value, props.elementName))
+const subentryLocation = computed(() => {
+   const entryId = props.content.attributes?.id
+   if (entryId) return {
+      name: 'edit', params: { dictId: editor.dictId, doctype: xmlName.value, entryId, mode: 'edit' },
+      query: route.query
+   }
+})
+const displayValue = computed(() => {
+   const definition = valueDefinition(xema.value, props.elementName, props.parentElementName, props.isAttribute)
+   const title = props.content.attributes?.title
+   return definition?.values?.find(item => item.value === title)?.caption ?? title ?? ''
+})
+const availableSlots = computed(() => {
+   const rule = props.parentElementName && xema.value.elements[props.parentElementName]?.children?.find(child => child.name === props.elementName)
+   return rule ? Math.max(0, maximumChildCount(rule.max) - props.numberOfElements) : 0
+})
+const showSubentriesSearchPopup = ref(false)
+const searchTerm = ref('')
+const subentries = ref<(RelatedEntry & { checked: boolean })[]>([])
+const selectedCount = computed(() => subentries.value.filter(entry => entry.checked).length)
+const searching = ref(false)
+const message = ref('')
+let subentryRequest: ReturnType<typeof entryEditorApi.subentries> | undefined
+watch(showSubentriesSearchPopup, open => {
+   if (!open) {
+      subentryRequest = undefined
+      searching.value = false
+   }
+})
+onScopeDispose(() => { subentryRequest = undefined })
 
-    }
-  }
+function linkNewSubentry() {
+   searchTerm.value = draft.headword()
+   showSubentriesSearchPopup.value = true
+   void getSubentries()
+}
+
+async function getSubentries() {
+   const request = entryEditorApi.subentries(editor.dictId, searchTerm.value.trim(), xmlName.value, props.elementName)
+   subentryRequest = request
+   subentries.value = []
+   message.value = ''
+   searching.value = true
+   try {
+      const result = await request
+      if (subentryRequest !== request) return
+      if (!result.success) throw new Error('Subentry search rejected')
+      subentries.value = result.entries.map(entry => ({ ...entry, checked: false }))
+      if (!subentries.value.length) message.value = 'No results found.'
+   } catch {
+      if (subentryRequest === request) message.value = 'Could not search subentries.'
+   } finally {
+      if (subentryRequest === request) searching.value = false
+   }
+}
+
+function saveSelectedSubentries() {
+   const selected = subentries.value.filter(entry => entry.checked)
+   if (!selected.length || selected.length > availableSlots.value) return
+   emit('create-element', selected.map(entry => ({
+      name: props.elementName,
+      content: { type: 'element', name: 'lxnm:subentryParent', attributes: {
+         doctype: entry.doctype, id: entry.id, title: entry.sortkey ?? ''
+      } }
+   })))
+   showSubentriesSearchPopup.value = false
 }
 </script>
 
@@ -203,7 +161,7 @@ export default {
     text-decoration: underline;
     transition: 0.3s all;
 
-    p {
+    a {
       cursor: pointer;
 
       &:hover {
@@ -268,6 +226,10 @@ export default {
     }
 
     .subentry {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: inherit;
       text-align: left;
       padding: 4px;
 

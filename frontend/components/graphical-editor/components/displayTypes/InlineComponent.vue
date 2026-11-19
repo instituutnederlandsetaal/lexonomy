@@ -10,26 +10,21 @@
         :editorChildNumber="editorChildNumber"
         :parentElementName="parentElementName"
         :numberOfElements="numberOfElements"
-        @move-element-down="moveElementDown"
-        @move-element-up="moveElementUp"
-        @add-element="createSibling"
-        @select-new-parent="selectNewParent"
-        @add-link="addLink"
-        @clone-element="cloneElement"
-        @remove-element="deleteElement"
+        :link-source-id="content.attributes?.['lxnm:linkable']"
+        v-on="actions"
+        @add-link="showSelectLinkedElement = true"
       />
-      <component :is="editorComponents[valueComponent]"
+      <component :is="valueComponent"
                  class="value-display"
                  :class="{'value-display--attribute': isAttribute}"
                  :elementName="elementName"
                  :elementData="elementData"
                  :content="componentData"
-                 :children="children"
+                 v-bind="showChildren ? {} : { children }"
                  :isAttribute="isAttribute"
                  :parentElementName="parentElementName"
                  :showPreview="showElementsPreview"
-                 @hide-children="hideChildren"
-                 @input="handleValueUpdate"
+                 @input="commitValue"
       />
     </section>
     <section v-if="!isElementHidden && readOnly" class="content">
@@ -43,104 +38,70 @@
                 :numberOfElements="numberOfElements"
                 :disable="true"
         />
-      <component :is="editorComponents[valueComponent]"
+      <component :is="valueComponent"
                  :class="{'read-only-element': !showElementsPreview}"
                  :elementName="elementName"
                  :elementData="elementData"
                  :content="componentData"
-                 :children="children"
+                 v-bind="showChildren ? {} : { children }"
                  :isAttribute="isAttribute"
                  :parentElementName="parentElementName"
                  :showPreview="showElementsPreview"
-                 @hide-children="hideChildren"
       />
     </section>
     <ComponentGeneratorComponent
-      v-if="valueComponent !== 'TextInputWithMarkupComponent'"
+      v-if="showChildren"
       :children="children"
       :elementName="elementName"
-      :content="calculatedContent"
+      :content="content"
       :showElementsPreview="showElementsPreview"
       :maxDisplayedChildren="maxDisplayedChildren"
-      @input="handleChildUpdate"
+      @input="change => commitContent(change.content)"
     />
     <SelectElementFromArray
       v-if="showSelectNewParent"
       v-model="showSelectNewParent"
-      :element-name="elementName"
+      :name="elementData.editorLabel"
       :possible-parent-elements="newPossibleParents"
-      :parentElementName="parentElementName"
       @selected-element="handleSelectedNewParent"
     />
     <LinkingElementSelector
       v-if="showSelectLinkedElement"
       v-model="showSelectLinkedElement"
-      :sourceId="calculatedContent.attributes && calculatedContent.attributes['lxnm:linkable']"
+      :sourceId="content.attributes && content.attributes['lxnm:linkable']"
       :element-name="elementName"
     />
 
   </div>
 </template>
 
-<script>
+<script setup lang="ts">
+import { computed, inject, ref } from 'vue'
+import { editorContextKey } from '../../editor-context.ts'
+import { useFieldActions, useFieldValue, type EditorFieldProps, type EmitField, type ValueUpdate } from '../../use-editor-field.ts'
+import ActionButtons from '../ActionButtons.vue'
+import ComponentGeneratorComponent from '../ComponentGeneratorComponent.vue'
+import LinkingElementSelector from '../LinkingElementSelector.vue'
+import SelectElementFromArray from '../SelectElementFromArray.vue'
 
-import ComponentGeneratorComponent from "../ComponentGeneratorComponent.vue"
-import ActionButtons from "../ActionButtons.vue"
-import layoutElementMixin from "../../shared-resources/mixins/layoutElementMixin.js"
-import SelectElementFromArray from "../SelectElementFromArray.vue"
-import LinkingElementSelector from "../LinkingElementSelector.vue"
+const props = withDefaults(defineProps<EditorFieldProps & { hideEmptyElements?: boolean; maxDisplayedChildren?: number }>(),
+   { maxDisplayedChildren: -1 })
+const emit = defineEmits<EmitField>()
+const { actions, newPossibleParents, showSelectNewParent, handleSelectedNewParent } = useFieldActions(props, emit)
+const showSelectLinkedElement = ref(false)
+const { componentData, valueComponent, showChildren, updateValue, commitContent } = useFieldValue(props, emit)
+const editor = inject(editorContextKey)!
+const readOnly = computed(() => props.elementData.readOnly || props.showElementsPreview)
+const configStyles = computed(() => !props.showElementsPreview && props.elementData.border
+   ? { border: `1px ${props.elementData.border} #B3D6FF` } : undefined)
+const isElementHidden = computed(() => {
+   if (!props.elementData.shown) return true
+   const filling = editor.config.xema.elements[props.elementName]?.filling
+   return props.hideEmptyElements && (filling === 'chd' || filling === 'emp')
+})
 
-export default {
-  inject: ['editorState', 'editorComponents'],
-  name: "InlineComponent",
-  components: {
-    LinkingElementSelector,
-    SelectElementFromArray,
-    ActionButtons,
-    ComponentGeneratorComponent
-  },
-  mixins: [
-    layoutElementMixin
-  ],
-  emits: ['input', 'move-element', 'create-element', 'delete-element', 'clone-element'],
-  props: {
-    children: Array,
-    elementData: Object,
-    elementName: String,
-    parentElementName: String,
-    numberOfElements: Number,
-    content: {
-      type: [Object, Array],
-      required: true
-    },
-    childrenContent: Object,
-    editorChildNumber: Number,
-    isAttribute: Boolean,
-    showElementsPreview: {
-      type: Boolean,
-      default: false
-    },
-    hideEmptyElements: {
-      type: Boolean,
-      default: false
-    },
-    maxDisplayedChildren: {
-      type: Number,
-      default: -1
-    }
-  },
-  computed: {
-    isElementHidden() {
-      if (!this.elementData.shown) {
-        return true
-      }
-      if (this.hideEmptyElements) {
-        const xema = this.editorState.entry.dictConfigs.xema.elements[this.elementName]
-        return xema ? ["chd", "emp"].includes(xema && xema.filling) : false
-      }
-      return false
-    }
-  }
+function commitValue(value: ValueUpdate) {
+   commitContent(updateValue(props.content, value))
 }
 </script>
 

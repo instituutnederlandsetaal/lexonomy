@@ -185,4 +185,4 @@ Accounts created through Sketch Engine can set a local password through **Forgot
 
 ## Run the tests
 
-After installing the Python requirements, run `python3 test-import.py` and `python3 test-initial-admin.py` from `api/`. Both suites create their own temporary databases.
+After installing the Python requirements, run the `test-*.py` scripts from `api/`. The database tests create their own temporary files. Run `npm test` from `frontend/` for the frontend tests.

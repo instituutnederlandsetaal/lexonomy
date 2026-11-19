@@ -1,5 +1,5 @@
 <template>
-<user-consent>
+<div>
    <div v-if="siteSettings?.consent">
       <h1>Terms of use</h1>
       <div class="row">
@@ -18,10 +18,10 @@
          </div>
       </div>
    </div>
-</user-consent>
+</div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref } from 'vue'
 import { acceptConsent } from '../js/auth.ts'
 import { siteSettings } from '../js/site-settings.ts'

@@ -1,16 +1,16 @@
 <template>
-<dict-config-searchability>
-   <LoadingOverlay v-if="state.isLoading || state.isSaving"/>
+<div class="dict-config-searchability">
+   <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-searchability', 'Searching']]"/>
    <h1>Searching</h1>
-   <DictConfigButtons :save-data="saveData"
+   <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || !ready"
          :show-save="elements.length > 0"></DictConfigButtons>
-   <div v-if="!state.isLoading && !elements.length"
+   <div v-if="ready && !elements.length"
          class="center-align grey-text">
       <h1>No elements found</h1>
    </div>
-   <div v-if="!state.isLoading && elements.length > 0">
-      <label for="search-element">Searchable elements</label>
+   <div v-if="ready && elements.length > 0">
+      <h2 class="flow-text">Searchable elements</h2>
       <div class="helper-text">
          The contents of elements you select here will be searchable (in addition to each entry's headword).
       </div>
@@ -19,54 +19,31 @@
          <label>
             <input type="checkbox"
                   :value="element"
-                  v-model="state.data.searchableElements"
-                  :disabled="element === activeDictionary.config?.titling?.headword"/>
+                  v-model="draft.searchableElements"
+                  :disabled="element === headword || saving"/>
             <span>{{ element }}</span>
          </label>
       </div>
    </div>
    <br><br>
-</dict-config-searchability>
+   <p v-if="!loading && !ready">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
+</div>
 </template>
 
-<script>
-import { activeDictionary, dictionaryWorkspace } from '../js/dictionary-workspace.ts'
+<script setup lang="ts">
+import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-export default {
-   setup: () => ({ activeDictionary }),
-   components: { DictConfigButtons, DictNav, LoadingOverlay },
-   data() {
-      return {
-         state: {
-            isLoading: true,
-            isSaving: false,
-            data: {searchableElements: []}
-         }
-      }
-   },
+import { computed, ref } from 'vue'
+import { activeDictionary } from '../js/dictionary-workspace.ts'
 
-   computed: {
-      elements() {
-         return Object.keys(this.activeDictionary.config?.xema?.elements || {})
-      }
-   },
-
-   async mounted() {
-      const response = await dictionaryWorkspace.loadDictionaryConfig('searchability')
-      if (response) {
-         this.state.data.searchableElements = response.content?.searchableElements || []
-      }
-      this.state.isLoading = false
-   },
-
-   methods: {
-      async saveData() {
-         this.state.isSaving = true
-         await dictionaryWorkspace.updateDictionaryConfig("searchability", this.state.data)
-         this.state.isSaving = false
-      }
-   }
-}
+const props = defineProps<{ dictId: string }>()
+const draft = ref({ searchableElements: [] as string[] })
+const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'searchability', content => {
+   draft.value.searchableElements = content.searchableElements ?? []
+})
+const elements = computed(() => Object.keys(activeDictionary.config?.xema.elements ?? {}))
+const headword = computed(() => activeDictionary.config?.titling.headword)
+const saveData = () => save(draft.value)
 </script>

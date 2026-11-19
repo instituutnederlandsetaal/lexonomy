@@ -1,15 +1,9 @@
 <template>
-<docs-about>
+<div class="docs-about">
    <div>
       <h1>About Lexonomy</h1>
    </div>
 
 
-</docs-about>
+</div>
 </template>
-
-<script>
-export default {
-
-}
-</script>

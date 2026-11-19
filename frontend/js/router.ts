@@ -1,5 +1,6 @@
-import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
+import { createRouter, createWebHashHistory, type LocationQuery, type RouteRecordRaw } from 'vue-router'
 import { login, session } from './auth.ts'
+import { dictionaryWorkspace, type EntrySearch } from './dictionary-workspace.ts'
 import { confirmEntryNavigation, unsavedEntry } from '../components/entry-editor/unsaved.js'
 
 declare module 'vue-router' {
@@ -45,6 +46,14 @@ const configPages = {
    xemplate: () => import('../components/dict-config-xemplate.vue'),
 }
 
+export function readEntrySearch(query: LocationQuery): EntrySearch {
+   const text = (key: string) => {
+      const value = query[key]
+      return (Array.isArray(value) ? value[0] : value) || ''
+   }
+   return { searchtext: text('s'), searchflag: text('f'), modifier: text('m') || 'start' }
+}
+
 export const router = createRouter({
    history: createWebHashHistory(),
    sensitive: true,
@@ -60,10 +69,10 @@ export const router = createRouter({
       { path: '/:dictId/links', name: 'links', component: () => import('../components/dict-links.vue'), meta: { requiresSession: true } },
       { path: '/:dictId/download', name: 'download', component: () => import('../components/dict-download.vue'), meta: { requiresSession: true } },
       { path: '/:dictId/upload', name: 'upload', component: () => import('../components/dict-upload.vue'), meta: { requiresSession: true } },
-      { path: '/:dictId/config', name: 'config', component: () => import('../components/dict-config.vue'),
+      { path: '/:dictId/config', name: 'config', component: () => import('../components/dict-config.vue'), props: true,
          alias: ['ske', 'kontext', 'gapi'].map(page => '/:dictId/config/' + page), meta: { requiresSession: true } },
       ...Object.entries(configPages).map(([page, component]) => ({
-         path: '/:dictId/config/' + page, name: 'config-' + page, component,
+         path: '/:dictId/config/' + page, name: 'config-' + page, component, props: true,
          alias: page === 'xemplate' ? '/:dictId/config/xemplate-override' : [],
          meta: { requiresSession: true }
       })),
@@ -82,5 +91,18 @@ router.beforeEach(async (to, from) => {
 })
 
 router.afterEach((to, from, failure) => {
-   if (!failure && to.path !== from.path) unsavedEntry.value = false
+   if (failure) return
+   if (to.path !== from.path) unsavedEntry.value = false
+
+   const { dictId, doctype, entryId, mode } = to.params
+   void dictionaryWorkspace.open({
+      dictId: typeof dictId === 'string' ? dictId : null,
+      doctype: typeof doctype === 'string' ? doctype : null,
+      entryId: Number(entryId) || null,
+      mode: mode === 'edit' ? 'edit' : 'view',
+      filters: readEntrySearch(to.query),
+      entryLimit: to.name === 'dictionary' ? 20 : undefined
+   }).then(result => {
+      if (result === false && router.currentRoute.value === to) void router.replace({ name: 'home' })
+   })
 })

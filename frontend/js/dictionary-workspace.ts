@@ -1,45 +1,14 @@
-import { computed, reactive, shallowReadonly } from 'vue'
+import { computed, reactive, ref, shallowReadonly } from 'vue'
 import Materialize from '../libs/materialize/materialize.min.js'
-import { api } from './api.ts'
+import { api, dictionaryPath } from './api.ts'
 import { session } from './auth.ts'
+import { xmlElementName } from './xema.ts'
+import type { DictionaryPermissions, DictionarySettings } from './dictionary-config-api.ts'
 
-type Permissions = { canEdit: boolean; canConfig: boolean; canUpload: boolean; canDownload: boolean }
 type DictionaryInfo = { title: string; blurb: string; licence: string; public: boolean }
 type EntrySummary = { id: number; doctype: string; title: string; titlePlain?: string; flag: string; isSaving?: boolean }
-type Flag = { key: string; name: string; label: string; color: string }
-type LabelledCode = { code: string; lang: string }
-
-type XemaElement = {
-   elementName?: string
-   filling?: string
-   children?: { name: string; min: number | string; max: number | string | null }[]
-   attributes?: Record<string, unknown>
-   values?: { value: string; caption: string }[]
-}
-
-type DictionarySettings = {
-   autonumbering: Record<string, { element: string; target?: string; type?: 'number' | 'string';
-      string_template?: string; number_globally?: boolean; number_next?: number;
-      overwrite_existing?: boolean; auto_apply?: boolean }>
-   download: { xslt?: string }
-   editing: { xonomyMode: 'nerd' | 'laic' | 'graphical'; xonomyTextEditor?: string; _css?: string; _js?: string }
-   flagging: { flag_element: string; flags: Flag[] }
-   ident: { title: string; blurb: string; lang: string; handle: string; langs?: LabelledCode[] }
-   links: Record<string, { linkElement: string; identifier: string; preview: string }>
-   publico: { public: boolean; licence?: string }
-   searchability: { searchableElements?: string[] }
-   subbing: Record<string, { attributes?: Record<string, string>; titling?: { headword: string } | null }>
-   titling: { numberEntries?: number; headword?: string; headwordSorting?: string; sortDesc?: boolean;
-      locale?: string; sort_locale?: string; locales?: LabelledCode[]; headwordAnnotationsType?: 'simple' | 'advanced';
-      headwordAnnotations?: string[]; headwordAnnotationsAdvanced?: string }
-   users: Record<string, Permissions>
-   xema: { root: string; elements: Record<string, XemaElement>; _dtd?: string; _newXml?: string; _xonomyDocSpec?: string }
-   xemplate: Record<string, unknown> & { _css?: string; _xsl?: string }
-}
-type Setting = keyof DictionarySettings
-type SettingsResponse<K extends Setting> = { success: true; id: K; content: DictionarySettings[K] } | { success: false }
-
-type WorkspaceConfig = Pick<DictionarySettings, 'xema' | 'xemplate' | 'subbing' | 'titling' | 'flagging' | 'editing'> & {
+export type EntrySearch = { searchtext: string; searchflag: string; modifier: string }
+export type WorkspaceConfig = Pick<DictionarySettings, 'xema' | 'xemplate' | 'subbing' | 'titling' | 'flagging' | 'editing'> & {
    linking: DictionarySettings['links']
    metadata: Record<string, string>
 }
@@ -47,28 +16,31 @@ type DictionaryResponse = { success: false } | {
    success: true
    configs: WorkspaceConfig
    doctypes: string[]
-   userAccess: Permissions | false
+   userAccess: DictionaryPermissions | false
    publicInfo: Omit<DictionaryInfo, 'licence'> & { licence?: string }
+}
+
+async function fetchDictionary(dictId: string) {
+   return api.get<DictionaryResponse>(dictionaryPath(dictId, 'config.json'))
 }
 type EntryListResponse = { success: false } | { success: true; entries: EntrySummary[]; total: number }
 
-export type EntrySearch = { searchtext: string; searchflag: string; modifier: string }
 type DictionaryLocation = {
    dictId: string | null
    doctype?: string | null
    entryId?: number | null
    mode?: 'view' | 'edit'
-   filters?: Partial<EntrySearch>
+   filters?: EntrySearch
    entryLimit?: number
 }
-type WorkspaceState = DictionaryInfo & EntrySearch & {
+type WorkspaceState = DictionaryInfo & {
    dictId: string | null
    config: WorkspaceConfig | null
    doctype: string | null
    doctypes: string[]
    entryId: number | null
    mode: 'view' | 'edit'
-   userAccess: Permissions | null
+   userAccess: DictionaryPermissions | null
    isDictionaryLoading: boolean
    entryList: EntrySummary[] | null
    entryCount: number
@@ -78,14 +50,17 @@ type WorkspaceState = DictionaryInfo & EntrySearch & {
 
 const defaultSearch: EntrySearch = { searchtext: '', searchflag: '', modifier: 'start' }
 
+export function sameEntrySearch(a: EntrySearch, b: EntrySearch) {
+   return a.searchtext === b.searchtext && a.searchflag === b.searchflag && a.modifier === b.modifier
+}
+
 function emptyDictionary(dictId: string | null): WorkspaceState {
    return {
       dictId, config: null, doctype: null, doctypes: [], entryId: null, mode: 'view',
       title: '', blurb: '', licence: '', public: false,
       userAccess: null,
       isDictionaryLoading: false,
-      entryList: null, entryCount: 0, isEntryListLoading: false, currentPage: 1,
-      ...defaultSearch
+      entryList: null, entryCount: 0, isEntryListLoading: false, currentPage: 1
    }
 }
 
@@ -93,19 +68,30 @@ const workspace = reactive(emptyDictionary(null))
 export const activeDictionary = shallowReadonly(workspace)
 
 let dictionaryRequest: Promise<false | undefined> | undefined
-let pendingEntries: { key: string; result: Promise<EntrySummary[] | undefined> } | undefined
-let entryLimit: number | undefined
-export const entryPageSize = computed(() => workspace.config?.titling.numberEntries || 1000)
+let pendingEntries: { page: number; result: Promise<EntrySummary[] | undefined> } | undefined
+let activeSearch = defaultSearch
+const entryLimit = ref<number>()
+const pendingFlagSaves = new Map<string, Promise<void>>()
+
+function flagSaveKey(dictId: string, id: number) {
+   return JSON.stringify([dictId, id])
+}
+export const entryPageSize = computed(() => {
+   const size = Number(entryLimit.value ?? workspace.config?.titling.numberEntries)
+   return Number.isSafeInteger(size) && size > 0 ? size : 1000
+})
 
 function loadDictionary(dictId: string) {
-   const request = api.get<DictionaryResponse>(`${encodeURIComponent(dictId)}/config.json`)
+   const request = fetchDictionary(dictId)
    const result: Promise<false | undefined> = request.then(response => {
       if (result !== dictionaryRequest) return
       if (!response.success) throw new Error('Dictionary not found')
 
-      const { configs, doctypes, userAccess, publicInfo } = response
+      const { configs, userAccess, publicInfo } = response
+      const rootTag = xmlElementName(configs.xema, configs.xema.root)
+      const doctypes = [...new Set([rootTag, ...response.doctypes.filter(type => type !== configs.xema.root)])].filter(Boolean)
       const doctype = workspace.doctype && doctypes.includes(workspace.doctype)
-         ? workspace.doctype : configs.xema.root || doctypes[0] || null
+         ? workspace.doctype : doctypes[0] ?? null
       const { title, blurb, licence = '', public: isPublic } = publicInfo
       Object.assign(workspace, { config: configs, doctypes, doctype, userAccess: userAccess || null, title, blurb, licence, public: isPublic })
       void loadEntryList()
@@ -127,23 +113,26 @@ function loadDictionary(dictId: string) {
    return result
 }
 
-function loadEntryList(page = workspace.currentPage, reusePending = false) {
-   const { dictId, doctype, searchtext, modifier, searchflag } = workspace
+function loadEntryList(page = workspace.currentPage): Promise<EntrySummary[] | undefined> | undefined {
+   const { dictId, doctype } = workspace
    if (!dictId || !workspace.config || !doctype) return
-   const howmany = entryLimit ?? entryPageSize.value
+   const howmany = entryPageSize.value
    const endpoint = session.value && workspace.userAccess?.canEdit
-      ? `${encodeURIComponent(doctype)}/entrylist.json` : 'search.json'
-   const key = JSON.stringify([dictId, endpoint, searchtext, modifier, searchflag, howmany, page])
-   if (reusePending && pendingEntries?.key === key) return pendingEntries.result
-
-   const request = api.post<EntryListResponse>(`${encodeURIComponent(dictId)}/${endpoint}`, {
-      searchtext, modifier, searchflag, howmany, offset: (page - 1) * howmany
+      ? dictionaryPath(dictId, doctype, 'entrylist.json') : dictionaryPath(dictId, 'search.json')
+   const request = api.post<EntryListResponse>(endpoint, {
+      ...activeSearch, howmany, offset: (page - 1) * howmany
    })
    const result: Promise<EntrySummary[] | undefined> = request.then(response => {
       if (pendingEntries?.result !== result) return
-      const entries = response.success ? response.entries : []
+      if (!response.success) throw new Error('Entry list request rejected')
+      const { entries, total } = response
+      const lastPage = Math.max(1, Math.ceil(total / howmany))
+      if (page > lastPage) return loadEntryList(lastPage)
+      for (const entry of entries) {
+         if (pendingFlagSaves.has(flagSaveKey(dictId, entry.id))) entry.isSaving = true
+      }
       workspace.entryList = entries
-      workspace.entryCount = response.success ? response.total : 0
+      workspace.entryCount = total
       workspace.currentPage = page
       return entries
    }).catch(() => {
@@ -156,15 +145,15 @@ function loadEntryList(page = workspace.currentPage, reusePending = false) {
       }
    })
 
-   pendingEntries = { key, result }
+   pendingEntries = { page, result }
    workspace.isEntryListLoading = true
    return result
 }
 
 export const dictionaryWorkspace = {
-   async open({ dictId, doctype, entryId = null, mode = 'view', filters, entryLimit: limit }: DictionaryLocation) {
-      const limitChanged = limit !== entryLimit
-      entryLimit = limit
+   async open({ dictId, doctype, entryId = null, mode = 'view', filters = defaultSearch, entryLimit: limit }: DictionaryLocation) {
+      const limitChanged = limit !== entryLimit.value
+      entryLimit.value = limit
       const opening = dictId !== workspace.dictId
       if (opening) {
          dictionaryRequest = pendingEntries = undefined
@@ -173,30 +162,35 @@ export const dictionaryWorkspace = {
       if (!dictId) return
 
       const nextType = workspace.config && (!doctype || !workspace.doctypes.includes(doctype))
-         ? workspace.config.xema.root || workspace.doctypes[0] || null : doctype || null
+         ? workspace.doctypes[0] ?? null : doctype || null
       const typeChanged = nextType !== workspace.doctype
-      if (typeChanged) {
-         workspace.doctype = nextType
-         workspace.entryList = null
-         workspace.entryCount = 0
-      }
+      workspace.doctype = nextType
       workspace.mode = mode
       workspace.entryId = entryId
 
-      const searchable = { ...defaultSearch, ...filters }
-      const searchChanged = searchable.searchtext !== workspace.searchtext || searchable.modifier !== workspace.modifier ||
-         searchable.searchflag !== workspace.searchflag
-      if (searchChanged) Object.assign(workspace, searchable)
+      const searchChanged = !sameEntrySearch(filters, activeSearch)
+      activeSearch = filters
       if (!workspace.config) return dictionaryRequest ?? loadDictionary(dictId)
-      if (typeChanged || searchChanged || limitChanged) void loadEntryList(1)
+      if (typeChanged || searchChanged || limitChanged) {
+         workspace.entryList = null
+         workspace.entryCount = 0
+         workspace.currentPage = 1
+         void loadEntryList()
+      }
    },
 
-   searchEntries(filters: EntrySearch) {
-      Object.assign(workspace, filters)
-      return loadEntryList(1, true)
+   searchResults() {
+      return pendingEntries ? pendingEntries.result : workspace.entryList
    },
 
-   loadEntryList,
+   repeatSearch() {
+      if (pendingEntries?.page === 1) return pendingEntries.result
+      return loadEntryList(1)
+   },
+
+   refreshEntries(dictId: string) {
+      if (workspace.dictId === dictId) return loadEntryList()
+   },
 
    nextPage() {
       if (workspace.currentPage < Math.ceil(workspace.entryCount / entryPageSize.value)) {
@@ -210,47 +204,39 @@ export const dictionaryWorkspace = {
       }
    },
 
-   async setEntryFlag(id: number, flag: string) {
+   pendingFlagSave(dictId: string, id: number) {
+      return pendingFlagSaves.get(flagSaveKey(dictId, id))
+   },
+
+   setEntryFlag(id: number, flag: string) {
       const { dictId } = workspace
       const entry = workspace.entryList?.find(item => item.id === id)
-      if (!dictId || !entry || entry.isSaving) return
+      if (!dictId || !entry) return
+      const key = flagSaveKey(dictId, id)
+      if (pendingFlagSaves.has(key)) return
       entry.isSaving = true
-      try {
-         const { success } = await api.post<{ success: boolean }>(`${encodeURIComponent(dictId)}/entryflag.json`, { id, flag })
-         if (!success) throw new Error('Flag rejected')
-         entry.flag = flag
-      } catch {
-         Materialize.toast({ html: 'Flag was not saved.' })
-      } finally {
-         delete entry.isSaving
-      }
-   },
-
-   async loadDictionaryConfig<K extends Setting>(id: K) {
-      const { dictId } = workspace
-      if (!dictId) return
-      try {
-         const response = await api.post<SettingsResponse<K>>(`${encodeURIComponent(dictId)}/configread.json`, { id })
-         if (response.success) return response
-         throw new Error('Settings request rejected')
-      } catch {
-         Materialize.toast({ html: `Could not load ${id} settings.` })
-      }
-   },
-
-   async updateDictionaryConfig<K extends Setting>(id: K, data: DictionarySettings[K]) {
-      const { dictId } = workspace
-      if (!dictId) return
-      try {
-         const response = await api.post<SettingsResponse<K>>(`${encodeURIComponent(dictId)}/configupdate.json`, {
-            id, content: JSON.stringify(data)
+      const currentEntry = () => workspace.dictId === dictId ? workspace.entryList?.find(item => item.id === id) : undefined
+      const request = api.post<{ success: boolean }>(dictionaryPath(dictId, 'entryflag.json'), { id, flag })
+         .then(({ success }) => {
+            if (!success) throw new Error('Flag rejected')
+            const current = currentEntry()
+            if (current) current.flag = flag
+            if (workspace.dictId === dictId && (activeSearch.searchflag || pendingEntries)) {
+               void loadEntryList(pendingEntries?.page)
+            }
+         }).catch(() => {
+            if (workspace.dictId === dictId) Materialize.toast({ html: 'Flag was not saved.' })
+         }).finally(() => {
+            pendingFlagSaves.delete(key)
+            delete entry.isSaving
+            const current = currentEntry()
+            if (current) delete current.isSaving
          })
-         if (!response.success) throw new Error('Settings update rejected')
-         Materialize.toast({ html: 'Saved' })
-         if (workspace.dictId === dictId) await loadDictionary(dictId)
-         return response
-      } catch {
-         Materialize.toast({ html: `Could not save ${id} settings.` })
-      }
+      pendingFlagSaves.set(key, request)
+      return request
+   },
+
+   refresh(dictId: string) {
+      if (workspace.dictId === dictId) return loadDictionary(dictId)
    }
 }

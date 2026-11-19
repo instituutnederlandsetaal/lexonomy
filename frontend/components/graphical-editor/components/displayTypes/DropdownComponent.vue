@@ -1,111 +1,66 @@
 <template>
-  <div>
-    <section v-if="elementData.shown && !readOnly"
-             class="dropdown"
-             :class="{ error: validationMessage }">
-      <p class="text--md">{{ (isAttribute) ? computedElementNameWithColon : '' }}</p>
-      <select
-        ref="select"
-        :name="computedElementName || elementName"
-        v-model="value"
-        @change="hasBlurred = true"
-      >
-        <option
-          value=""
-          disabled
-        >
-          Choose {{ computedElementName || elementName }}
-        </option>
-        <option v-for="option in options" :key="option.value" :value="option.value">{{ option.caption }}</option>
-      </select>
-    </section>
-    <section v-if="elementData.shown && readOnly" class="read-only">
-      <p v-if="showPreview" :class="computedClass">{{ computedElementNameWithColon }} </p>
-      <span :class="computedClass">{{ valueCaption }}</span>
-    </section>
-  </div>
+   <div>
+      <section v-if="elementData.shown && !readOnly" class="dropdown" :class="{ error: validationMessage }">
+         <p v-if="isAttribute" class="text--md">{{ name }}:</p>
+         <FormSelect :model-value="value" :options="options" :aria-label="name"
+                     :placeholder="`Choose ${name}`" @update:model-value="choose"
+                     @blur="hasBlurred = true"/>
+      </section>
+      <section v-else-if="elementData.shown" class="read-only">
+         <p v-if="showPreview" class="text--xs">{{ name }}:</p>
+         <span :class="showPreview ? 'text--xs' : 'text--md'">{{ valueCaption }}</span>
+      </section>
+   </div>
 </template>
 
-<script>
-import Materialize from '../../../../libs/materialize/materialize.min.js'
+<script setup lang="ts">
+import { editorContextKey, requiredFieldsKey } from '../../editor-context.ts'
+import { computed, inject, onBeforeUnmount, ref } from 'vue'
+import type { Attributes, Element } from 'xml-js'
+import { xmlElementName } from '../../../../js/xema.ts'
+import FormSelect from '../../../FormSelect.vue'
+import { valueDefinition, type ElementDisplay } from '../../editor-schema.ts'
 
-import computedElementName from "../../shared-resources/mixins/computedElementName.js"
-import showPreview from "../../shared-resources/mixins/showPreview.js"
-import computedValidation from "../../shared-resources/mixins/computedValidation.js"
+const props = defineProps<{
+   elementData: ElementDisplay
+   elementName: string
+   parentElementName?: string
+   content: Element
+   isAttribute?: boolean
+   showPreview?: boolean
+}>()
+const emit = defineEmits<{
+   input: [change: { elementName: string; attributes?: Attributes; elements?: Element[] }]
+}>()
+const editor = inject(editorContextKey)!
+const requiredFields = inject(requiredFieldsKey)!
+const hasBlurred = ref(false)
+const readOnly = computed(() => props.elementData.readOnly || props.showPreview)
+const xema = computed(() => editor.config.xema)
+const definition = computed(() => valueDefinition(xema.value, props.elementName, props.parentElementName, props.isAttribute))
+const mandatory = computed(() => props.isAttribute && definition.value && 'optionality' in definition.value && definition.value.optionality === 'obligatory')
+const name = computed(() => props.isAttribute ? props.elementName : xmlElementName(xema.value, props.elementName))
+const options = computed(() => (definition.value?.values ?? []).map(({ value, caption }) => ({ value, label: caption || value })))
+const value = computed(() => String(props.content.text ?? ''))
+const valueCaption = computed(() => options.value.find(option => option.value === value.value)?.label ?? value.value)
+const validationMessage = computed(() => hasBlurred.value && missingField() ? `The ${name.value} value is required.` : '')
+requiredFields.add(missingField)
+onBeforeUnmount(() => requiredFields.delete(missingField))
 
-export default {
-  inject: ['editorState'],
-  name: "DropdownComponent",
-  emits: ['input'],
-  props: {
-    elementData: Object,
-    elementName: String,
-    content: {
-      type: Object,
-      required: true
-    }
-  },
-  mixins: [computedElementName, showPreview, computedValidation],
-  computed: {
-    valueCaption() {
-      let selectedOption = this.options.find(el => el.value === this.value)
-      return selectedOption && selectedOption.caption
-    }
-  },
-  data() {
-    return {
-      value: null,
-      options: []
-    }
-  },
-  watch: {
-    content(content) {
-      this.value = content.text ?? ''
-    },
-    value(newVal) {
-      if (newVal === this.content.text) {
-        return
-      }
-      if (this.content.type === "attribute") {
-        this.$emit('input', {elementName: this.elementName, attributes: {[this.content.name]: newVal}})
-      } else {
-        let elements = Object.assign({}, this.content)
-        elements.text = newVal
-        this.$emit('input', {elementName: this.elementName, elements: [elements]})
-      }
-    }
-  },
-  created() {
-    let structureConfig = this.editorState.entry.dictConfigs.xema.elements[this.elementName]
-    if (!structureConfig) {
-      let parentConfig = this.editorState.entry.dictConfigs.xema.elements[this.parentElementName].attributes || {}
-      structureConfig = parentConfig[this.elementName]
-    }
-    this.options = structureConfig?.values ?? []
-    this.value = this.content.text ?? ''
-  },
-  mounted() {
-    if (this.$refs.select) {
-      Materialize.FormSelect.init(this.$refs.select)
-    }
-  },
-  beforeUnmount() {
-    if (this.$refs.select) {
-      Materialize.FormSelect.getInstance(this.$refs.select)?.destroy()
-    }
-  }
+function missingField() {
+   if (props.elementData.shown && !readOnly.value && mandatory.value && !value.value) return name.value
+}
+
+function choose(nextValue: unknown) {
+   if (typeof nextValue !== 'string' || nextValue === value.value) return
+   hasBlurred.value = true
+   const { content, elementName } = props
+   if (props.isAttribute) emit('input', { elementName, attributes: { [content.name ?? elementName]: nextValue } })
+   else emit('input', { elementName, elements: [{ ...content, text: nextValue }] })
 }
 </script>
 
-<style lang="scss" scoped>
-.dropdown {
-  display: flex;
-  justify-content: start;
-
-  p {
-    margin-right: 8px;
-    color: inherit;
-  }
-}
-
+<style scoped>
+.dropdown { display: flex; align-items: baseline; }
+.dropdown p { margin-right: 8px; color: inherit; }
 </style>

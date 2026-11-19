@@ -1,7 +1,7 @@
 <template>
   <div class="popup-component" :class="{'element-hidden': !elementData.shown}">
     <div>
-      <section v-if="elementData.shown" class="preview drop-shadow--100" @click="openPopup">
+      <section v-if="elementData.shown" class="preview drop-shadow--100">
         <ActionButtons
           v-if="!isAttribute"
           class="actions-button"
@@ -10,32 +10,29 @@
           :editorChildNumber="editorChildNumber"
           :parentElementName="parentElementName"
           :numberOfElements="numberOfElements"
-          @move-element-down="moveElementDown"
-          @move-element-up="moveElementUp"
-          @add-element="createSibling"
-          @select-new-parent="selectNewParent"
-          @add-link="addLink"
-          @clone-element="cloneElement"
-          @remove-element="deleteElement"
+          :link-source-id="calculatedContent.attributes?.['lxnm:linkable']"
+          v-on="actions"
+          @add-link="showSelectLinkedElement = true"
         />
-        <section>
-          <component :is="editorComponents[valueComponent]"
+        <section class="preview-body">
+          <button type="button" class="preview-open" :aria-label="`Edit ${xmlName}`" @click="openPopup"></button>
+          <component :is="valueComponent"
                      class="preview-element text--md"
                      :elementName="elementName"
                      :elementData="elementData"
                      :content="componentData"
+                     v-bind="showChildren ? {} : { children }"
                      :isAttribute="isAttribute"
                      :parentElementName="parentElementName"
                      :showPreview="true"
-                     @hide-children="hideChildren"
-          />
+              />
 
           <ComponentGeneratorComponent
             v-if="showChildren"
             class="preview-components"
             :children="children"
             :elementName="elementName"
-            :content="viewOnlyContent"
+            :content="content"
             :showElementsPreview="true"
             :hideEmptyElements="true"
             :maxDisplayedChildren="5"
@@ -44,36 +41,36 @@
       </section>
       <PopupDisplay v-model="showPopup"
                     :fullHeight="false"
-                    :forceButtonClose="true"
+                    prevent-outside-dismiss
+                    :title="`Edit ${xmlName}`"
                     @cancel="handleCancel"
                     @save="handleSave"
       >
         <component
           v-if="elementData.shown"
-          :is="editorComponents[valueComponent]"
+          :is="valueComponent"
           :elementName="elementName"
           :elementData="elementData"
           :content="componentData"
+          v-bind="showChildren ? {} : { children }"
           :isAttribute="isAttribute"
           :parentElementName="parentElementName"
-          @hide-children="hideChildren"
-          @input="handleTempValueUpdate"
+          @input="updatePopupValue"
         />
         <ComponentGeneratorComponent
           v-if="showChildren"
           :children="children"
           :elementName="elementName"
           :content="calculatedContent"
-          @input="handleTempChildUpdate"
+          @input="change => updatePopup(change.content)"
         />
       </PopupDisplay>
     </div>
     <SelectElementFromArray
       v-if="showSelectNewParent"
       v-model="showSelectNewParent"
-      :element-name="elementName"
+      :name="elementData.editorLabel"
       :possible-parent-elements="newPossibleParents"
-      :parentElementName="parentElementName"
       @selected-element="handleSelectedNewParent"
     />
     <LinkingElementSelector
@@ -85,94 +82,74 @@
   </div>
 </template>
 
-<script>
-import ComponentGeneratorComponent from "../ComponentGeneratorComponent.vue"
-import ActionButtons from "../ActionButtons.vue"
-import layoutElementMixin from "../../shared-resources/mixins/layoutElementMixin.js"
-import PopupDisplay from "../PopupDisplay.vue"
-import SelectElementFromArray from "../SelectElementFromArray.vue"
-import LinkingElementSelector from "../LinkingElementSelector.vue"
+<script setup lang="ts">
+import { computed, inject, onBeforeUnmount, ref, shallowRef } from 'vue'
+import type { Element } from 'xml-js'
+import { editorContextKey, provideEditorDraft, setPopupDirtyKey } from '../../editor-context.ts'
+import { serializeDraft } from '../../editor-schema.ts'
+import { useFieldActions, useFieldValue, type EditorFieldProps, type EmitField, type ValueUpdate } from '../../use-editor-field.ts'
+import { xmlElementName } from '../../../../js/xema.ts'
+import ActionButtons from '../ActionButtons.vue'
+import ComponentGeneratorComponent from '../ComponentGeneratorComponent.vue'
+import LinkingElementSelector from '../LinkingElementSelector.vue'
+import PopupDisplay from '../PopupDisplay.vue'
+import SelectElementFromArray from '../SelectElementFromArray.vue'
 
-export default {
-  inject: ['editorComponents'],
-  name: "PopupComponent",
-  components: {
-    LinkingElementSelector,
-    ComponentGeneratorComponent,
-    ActionButtons,
-    PopupDisplay,
-    SelectElementFromArray
-  },
-  mixins: [
-    layoutElementMixin
-  ],
-  emits: ['input', 'move-element', 'create-element', 'delete-element', 'clone-element'],
-  props: {
-    children: Array,
-    elementData: Object,
-    elementName: String,
-    parentElementName: String,
-    numberOfElements: Number,
-    content: {
-      type: [Object, Array],
-      required: true
-    },
-    editorChildNumber: Number,
-    isAttribute: Boolean,
-    showElementsPreview: {
-      type: Boolean,
-      default: false
-    }
-  },
-  computed: {
-    viewOnlyContent() {
-      return this.updatedContent || this.content
-    },
-    calculatedContent() {
-      return this.unsavedData || this.viewOnlyContent
-    }
-  },
-  data() {
-    return {
-      showPopup: false,
-      showChildren: true,
-      updatedContent: null,
-      unsavedData: null
-    }
-  },
-  methods: {
-    openPopup() {
-      this.unsavedData = JSON.parse(JSON.stringify(this.viewOnlyContent))
-      this.showPopup = true
-    },
-    handleCancel() {
-      this.showPopup = false
-      this.unsavedData = null
-    },
-    handleSave() {
-      const content = this.unsavedData
-      this.handleCancel()
-      if (this.isAttribute) {
-        this.handleValueUpdate({ attributes: { [content.name]: content.text } })
-      } else {
-        this.handleChildUpdate({ content })
-      }
-    },
-    handleTempValueUpdate(data) {
-      if (this.isAttribute) {
-        this.unsavedData.text = data.attributes[this.unsavedData.name]
-      } else {
-        this.unsavedData.elements = data.elements
-      }
-    },
-    handleTempChildUpdate(data) {
-      this.unsavedData = data.content
-    }
-  }
+const props = defineProps<EditorFieldProps>()
+const emit = defineEmits<EmitField>()
+const { actions, newPossibleParents, showSelectNewParent, handleSelectedNewParent } = useFieldActions(props, emit)
+const showSelectLinkedElement = ref(false)
+const editor = inject(editorContextKey)!
+const setPopupDirty = inject(setPopupDirtyKey)!
+const popupId = Symbol('Element draft')
+const showPopup = ref(false)
+const unsavedData = shallowRef<Element | null>(null)
+const calculatedContent = computed(() => unsavedData.value ?? props.content)
+const xmlName = computed(() => xmlElementName(editor.config.xema, props.elementName))
+const { componentData, valueComponent, showChildren, updateValue, commitContent } = useFieldValue(props, emit, () => calculatedContent.value)
+provideEditorDraft(() => unsavedData.value, updatePopup,
+   () => ({ elementName: props.elementName, parentElementName: props.parentElementName }))
+onBeforeUnmount(() => setPopupDirty(popupId, false))
+
+function openPopup() {
+   unsavedData.value = JSON.parse(JSON.stringify(props.content))
+   showPopup.value = true
+}
+
+function updatePopup(content: Element) {
+   unsavedData.value = content
+   setPopupDirty(popupId, serializeDraft(content) !== serializeDraft(props.content))
+}
+
+function updatePopupValue(value: ValueUpdate) {
+   updatePopup(updateValue(calculatedContent.value, value))
+}
+
+function handleCancel() {
+   setPopupDirty(popupId, false)
+   showPopup.value = false
+   unsavedData.value = null
+}
+
+function handleSave() {
+   const content = unsavedData.value
+   handleCancel()
+   if (content) commitContent(content)
 }
 </script>
 
 <style lang="scss" scoped>
+.preview-body { position: relative; flex: 1; }
+.preview-body .preview-open {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.preview-body .preview-open:focus-visible { outline: 2px solid #005fcc; }
+
 .popup-component {
   padding: 8px 16px;
   margin-bottom: 8px;

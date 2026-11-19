@@ -1,54 +1,50 @@
 <template>
-<dict-config-xema>
-   <LoadingOverlay v-if="state.isLoading || state.isSaving"/>
+<div class="dict-config-xema">
+   <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-xema', 'Entry structure']]"/>
-
    <h1>Entry structure</h1>
-   <div v-if="state.isLoading">Loading...</div>
 
-   <template v-if="state.xema">
-      <DictConfigButtons :save-data="saveData">
-         <button class="btn waves-effect waves-light" @click="toggleOverride" > {{ state.override ? 'Stop using your own schema' : 'Use your own schema' }} <i class="material-symbols-outlined right">edit</i></button>
+   <template v-if="ready && draft">
+      <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving">
+         <button type="button" class="btn waves-effect waves-light" @click="override = !override">
+            {{ override ? 'Stop using your own schema' : 'Use your own schema' }}
+            <i class="material-symbols-outlined right">edit</i>
+         </button>
       </DictConfigButtons>
 
-      <div v-if="!state.override" id="editor" class="editor designer">
+      <div v-if="!override" id="editor" class="editor designer">
          <div class="list">
             <DictConfigElementInTree v-for="root in roots"
-               :key="root.id"
-               :depth="0"
-               :data="root"
-               :xema="state.xema"
-               :current-element="state.currentElement"
-               :current-attribute="state.currentAttribute"
-               :selectElementOrAttribute="selectElementOrAttribute"
+               :key="root"
+               :id="root"
+               :xema="draft"
+               :current-element="currentElement"
+               :current-attribute="currentAttribute"
+               @select="select"
             />
          </div>
          <div class="details">
-            <DictConfigXemaElement v-if="state.currentElement && !state.currentAttribute"
-               :key="state.currentElement"
-               :elementId="state.currentElement"
-               :xema="state.xema"
-               :config="state.xema.elements[state.currentElement]"
-               :apply-config="onXemaElementUpdated"
-               :createElement="onXemaElementUpdated"
-               :selectElementOrAttribute="selectElementOrAttribute"
-               :remove-element="onXemaElementDeleted"
+            <DictConfigXemaElement v-if="currentElement && selectedElement && !currentAttribute"
+               :key="currentElement"
+               :element-id="currentElement"
+               :xema="draft"
+               :config="selectedElement"
+               @update="updateElement"
+               @select="select"
+               @remove="removeElement"
             />
-
-            <DictConfigXemaAttribute v-if="state.currentElement && state.currentAttribute"
-               :key="`${state.currentElement}/${state.currentAttribute}`"
-               :elementId="state.currentElement"
-               :attributeId="state.currentAttribute"
-               :xema="state.xema"
-               :config="state.xema.elements[state.currentElement].attributes[state.currentAttribute]"
-
-               :apply-config="onXemaAttributeUpdated"
-               :renameAttribute="onXemaAttributeRenamed"
+            <DictConfigXemaAttribute v-if="currentElement && currentAttribute && selectedAttribute && selectedElement?.attributes"
+               :key="`${currentElement}/${currentAttribute}`"
+               :attribute-id="currentAttribute"
+               :attributes="selectedElement.attributes"
+               :config="selectedAttribute"
+               @update="updateAttribute"
+               @rename="renameAttribute"
             />
          </div>
       </div>
 
-      <div v-if="state.override">
+      <div v-else>
          <div class="row">
             <div class="col s10">
                <p>To specify your custom Lexonomy schema use either <i>Xonomy Document Specification</i>, or <i>DTD</i>.</p>
@@ -58,16 +54,16 @@
          </div>
          <div class="row">
             <div class="input-field col s10">
-               <textarea id="editor_doc" class="materialize-textarea" placeholder="" v-model="state.xema._xonomyDocSpec"></textarea>
-               <label for="editor_doc">Document specification</label>
-               <span class="helper-text">Xonomy Document Specification. If you would like to see an example, <a @click="exampleDoc">click here to load a sample specification</a>.</span>
+               <textarea id="editor_doc" rows="6" class="materialize-textarea" placeholder="" v-model="draft._xonomyDocSpec"></textarea>
+               <label class="active" for="editor_doc">Document specification</label>
+               <span class="helper-text">Xonomy Document Specification. If you would like to see an example, <button type="button" class="btn-flat" @click="exampleDoc">click here to load a sample specification</button>.</span>
             </div>
          </div>
          <div class="row">
             <div class="input-field col s10">
-               <textarea id="editor_xml" class="materialize-textarea" placeholder="" v-model="state.xema._newXml"></textarea>
-               <label for="editor_xml">Template for new entries</label>
-               <span class="helper-text">XML template for newly created entries. If you would like to see an example, <a @click="exampleXML">click here to load a sample XML template</a>.</span>
+               <textarea id="editor_xml" rows="6" class="materialize-textarea" placeholder="" v-model="draft._newXml"></textarea>
+               <label class="active" for="editor_xml">Template for new entries</label>
+               <span class="helper-text">XML template for newly created entries. If you would like to see an example, <button type="button" class="btn-flat" @click="exampleXML">click here to load a sample XML template</button>.</span>
             </div>
          </div>
          <div class="row">
@@ -78,168 +74,122 @@
          </div>
          <div class="row">
             <div class="input-field col s10">
-               <textarea id="editor_dtd" class="materialize-textarea" placeholder="" v-model="state.xema._dtd"></textarea>
-               <label for="editor_dtd">Your DTD</label>
-               <span class="helper-text">If you would like to see an example, <a @click="exampleDTD">click here to load a sample DTD</a>.</span>
+               <textarea id="editor_dtd" rows="6" class="materialize-textarea" placeholder="" v-model="draft._dtd"></textarea>
+               <label class="active" for="editor_dtd">Your DTD</label>
+               <span class="helper-text">If you would like to see an example, <button type="button" class="btn-flat" @click="exampleDTD">click here to load a sample DTD</button>.</span>
             </div>
          </div>
       </div>
 
    </template>
-</dict-config-xema>
+   <p v-else-if="!loading">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
+</div>
 </template>
 
-<script>
-import Materialize from '../libs/materialize/materialize.min.js'
+<script setup lang="ts">
+import { computed, ref } from 'vue'
 import '../widgets/xema-designer.css'
-import { dictionaryWorkspace } from '../js/dictionary-workspace.ts'
+import { isValidXmlName } from '../js/xml.ts'
+import { type Xema, type XemaAttribute, type XemaElement } from '../js/xema.ts'
+import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictConfigElementInTree from './dict-config-element-in-tree.vue'
 import DictConfigXemaAttribute from './entry-structure/dict-config-xema-attribute.vue'
 import DictConfigXemaElement from './entry-structure/dict-config-xema-element.vue'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-import { treeRoots } from './entry-structure/tree-roots.js'
+import { treeRoots } from './entry-structure/tree-roots.ts'
 
-export default {
-   components: { DictConfigButtons, DictConfigElementInTree, DictConfigXemaAttribute, DictConfigXemaElement, DictNav, LoadingOverlay },
-   data() {
-      return {
-         state: {
-            isLoading: true,
-            isSaving: false,
-            override: false,
-            currentElement: null, // initialize in beforeMount
-            currentAttribute: null,
-            xema: undefined, // initialized in beforeMount
-         }
-      }
-   },
+const props = defineProps<{ dictId: string }>()
+const draft = ref<Xema>()
+const currentElement = ref<string>()
+const currentAttribute = ref<string>()
+const override = ref(false)
+const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'xema', content => {
+   draft.value = { ...content, _newXml: content._newXml ?? content.newXml }
+   currentElement.value = treeRoots(content)[0]
+   currentAttribute.value = undefined
+   override.value = Boolean(content._xonomyDocSpec || content._dtd || content._newXml || content.newXml)
+})
+const roots = computed(() => treeRoots(draft.value))
+const selectedElement = computed(() => currentElement.value ? draft.value?.elements[currentElement.value] : undefined)
+const selectedAttribute = computed(() => currentAttribute.value ? selectedElement.value?.attributes?.[currentAttribute.value] : undefined)
 
-   async mounted() {
-      const response = await dictionaryWorkspace.loadDictionaryConfig('xema')
-      if (response) {
-         const { content } = response
-         this.state.xema = content
-         this.state.override = Boolean(content._xonomyDocSpec || content._dtd)
-         this.state.currentElement = content.root
-         if (this.state.override) this.$nextTick(this.resizeFields)
-      }
-      this.state.isLoading = false
-   },
+function select(element: string, attribute?: string) {
+   if (!draft.value || !Object.hasOwn(draft.value.elements, element)) return
+   currentElement.value = element
+   currentAttribute.value = attribute
+}
 
-   computed: {
-      roots() {
-         return treeRoots(this.state.xema)
-      }
-   },
+function updateElement(id: string, config: XemaElement) {
+   if (draft.value) draft.value.elements = { ...draft.value.elements, [id]: config }
+}
 
-   methods: {
-      resizeFields() {
-         Materialize.updateTextFields()
-         this.$el.querySelectorAll('#editor_doc, #editor_xml, #editor_dtd').forEach(field => Materialize.textareaAutoResize(field))
-      },
+function removeElement(id: string) {
+   const xema = draft.value
+   if (!xema || Object.keys(xema.elements).length <= 1) return
+   if (Object.values(xema.elements).some(element => element.children?.some(child => child.name === id))) return
+   delete xema.elements[id]
+   if (xema.root === id) xema.root = treeRoots(xema)[0]
+   if (currentElement.value === id) select(xema.root)
+}
 
-      toggleOverride() {
-         this.state.override = !this.state.override
-         if (this.state.override) {
-            this.$nextTick(this.resizeFields)
-         } else {
-            delete this.state.xema._xonomyDocSpec
-            delete this.state.xema._dtd
-            delete this.state.xema._newXml
-         }
-      },
-
-      getConfigData() {
-         const xema = this.state.xema
-         const data = {elements: xema.elements, root: this.roots[0]?.id || 'entry'}
-         if (this.state.override) {
-            for (const key of ['_xonomyDocSpec', '_newXml', '_dtd']) {
-               if (xema[key]) data[key] = xema[key]
-            }
-         }
-         return data
-      },
-
-      async saveData() {
-         this.state.isSaving = true
-         await dictionaryWorkspace.updateDictionaryConfig("xema", this.getConfigData())
-         this.state.isSaving = false
-      },
-
-      selectElementOrAttribute(currentElement, currentAttribute) {
-         this.state.currentElement = currentElement;
-         this.state.currentAttribute = currentAttribute;
-
-      },
-
-      onXemaElementUpdated(id, newConfig) {
-         this.state.xema.elements[id] = newConfig;
-
-      },
-
-      onXemaElementDeleted(id) {
-         // check it's not used anywhere, and only delete if it isn't
-         if (!Object.values(this.state.xema.elements).some(el => el.children?.some(c => c.name === id))) {
-            delete this.state.xema.elements[id];
-            if (this.state.currentElement === id)  {
-               this.state.currentElement = undefined
-               this.state.currentAttribute = undefined
-            }
-         }
-      },
-
-      onXemaAttributeUpdated(newConfig) {
-         const el = this.state.xema.elements[this.state.currentElement];
-         el.attributes[this.state.currentAttribute] = newConfig;
-
-      },
-
-      onXemaAttributeRenamed(newName) {
-         const el = this.state.xema.elements[this.state.currentElement];
-         el.attributes[newName] = el.attributes[this.state.currentAttribute];
-         delete el.attributes[this.state.currentAttribute];
-         this.state.currentAttribute = newName;
-
-      },
-
-      exampleDoc() {
-         this.state.xema._xonomyDocSpec = JSON.stringify({ elements: { "entry": {}, "headword": {hasText: true} }}, undefined, 2);
-         this.$nextTick(this.resizeFields)
-      },
-
-      exampleXML() {
-         this.state.xema._newXml = `<entry><headword></headword></entry>`;
-         this.$nextTick(this.resizeFields)
-      },
-
-      exampleDTD() {
-         this.state.xema._dtd = `<!ELEMENT entry (headword)>\n<!ELEMENT headword (#PCDATA)>`;
-         this.$nextTick(this.resizeFields)
-      }
+function updateAttribute(config: XemaAttribute) {
+   const id = currentElement.value
+   const name = currentAttribute.value
+   if (id && name && selectedElement.value) {
+      updateElement(id, { ...selectedElement.value, attributes: { ...selectedElement.value.attributes, [name]: config } })
    }
+}
+
+function renameAttribute(name: string) {
+   const id = currentElement.value
+   const previous = currentAttribute.value
+   const element = selectedElement.value
+   if (!id || !previous || !element?.attributes || !isValidXmlName(name) || Object.hasOwn(element.attributes, name)) return
+   const attributes = { ...element.attributes, [name]: element.attributes[previous] }
+   delete attributes[previous]
+   updateElement(id, { ...element, attributes })
+   currentAttribute.value = name
+}
+
+function saveData() {
+   const xema = draft.value
+   if (!xema) return
+   const { _xonomyDocSpec, _newXml, _dtd, newXml: _legacy, ...structure } = xema
+   structure.root = Object.hasOwn(xema.elements, xema.root) ? xema.root : roots.value[0] ?? xema.root
+   return save(override.value ? { ...structure, _xonomyDocSpec, _newXml, _dtd } : structure)
+}
+
+function exampleDoc() {
+   if (draft.value) draft.value._xonomyDocSpec = JSON.stringify({ elements: { entry: {}, headword: { hasText: true } } }, undefined, 2)
+}
+function exampleXML() {
+   if (draft.value) draft.value._newXml = '<entry><headword></headword></entry>'
+}
+function exampleDTD() {
+   if (draft.value) draft.value._dtd = '<!ELEMENT entry (headword)>\n<!ELEMENT headword (#PCDATA)>'
 }
 </script>
 
 <style>
-dict-config-xema #editor {
+.dict-config-xema #editor {
    position: relative !important;
    min-height: 750px;
    display: flex;
    flex-wrap: nowrap;
 }
-dict-config-xema #editor .details {flex-grow: 1; overflow: hidden; max-width: 100%;}
+.dict-config-xema #editor .details {flex-grow: 1; overflow: hidden; max-width: 100%;}
 
-dict-config-xema .editor .list { flex-basis: 0; }
+.dict-config-xema .editor .list { flex-basis: 0; }
 
-dict-config-xema #editor.designer input.textbox.cap {
+.dict-config-xema #editor.designer input.textbox.cap {
    width: 15em !important;
 }
-dict-config-xema #editor.designer input[type=radio] {
+.dict-config-xema #editor.designer input[type=radio] {
    opacity: 1 !important;
 }
-dict-config-xema {
+.dict-config-xema {
    display: block;
 }
 </style>

@@ -1,199 +1,98 @@
 <template>
-  <div ref="wrapper" v-if="keepAlive || modelValue" v-show="modelValue" class="modal" @click="maybeClosePopup"
-       :style="computedStyles">
-    <div ref="modalContent" class="modal-content" :class="{'full-height': fullHeight, 'adjustable-height': !fullHeight}">
-      <span class="close" @click="closeButtonClick">&times;</span>
-      <slot></slot>
-      <div v-if="!hideActions" class="default-actions">
-        <button @click="$emit('save')">Ok</button>
-        <button @click="$emit('cancel')">Cancel</button>
-      </div>
-    </div>
-  </div>
+   <DialogRoot :open="modelValue" @update:open="open => { if (!open) cancel() }">
+      <DialogPortal>
+         <DialogOverlay class="editor-dialog-overlay" :style="{ zIndex }"/>
+         <DialogContent v-bind="$attrs" class="editor editor-dialog" :class="{ 'full-height': fullHeight }"
+                        :style="{ zIndex }" :inert="editorLocked" :aria-describedby="undefined"
+                        @interact-outside="maybePreventOutsideDismiss" @close-auto-focus="restoreFocus">
+            <VisuallyHidden as-child><DialogTitle>{{ title }}</DialogTitle></VisuallyHidden>
+            <button type="button" class="close" aria-label="Close dialog" @click="cancel">×</button>
+            <slot/>
+            <div v-if="!hideActions" class="default-actions">
+               <button type="button" :disabled="saveDisabled" @click="emit('save')">Ok</button>
+               <button type="button" @click="cancel">Cancel</button>
+            </div>
+         </DialogContent>
+      </DialogPortal>
+   </DialogRoot>
 </template>
 
-<script>
-export default {
-  inject: ['editorState'],
-  name: "PopupDisplay",
-  emits: ['update:modelValue', 'cancel', 'save'],
-  props: {
-    modelValue: {
-      type: Boolean,
-      required: true
-    },
-    zIndex: {
-      type: String,
-      default: "2"
-    },
-    keepAlive: {
-      type: Boolean,
-      default: false
-    },
-    fullHeight: {
-      type: Boolean,
-      default: true
-    },
-    forceButtonClose: {
-      type: Boolean,
-      default: false
-    },
-    hideActions: {
-      type: Boolean,
-      default: false
-    }
-  },
-  watch: {
-    modelValue: {
-      handler(newVal) {
-        if (newVal) {
-          if (!this.popupId) {
-            this.popupId = Math.random()
-          }
-          this.editorState.openedPopups.push(this.popupId)
-          document.addEventListener('keydown', this.handleNavigationKeys)
-        } else {
-          this.removeFromStack()
-        }
-      },
-      immediate: true
-    }
-  },
-  computed: {
-    computedStyles() {
-      return {zIndex: this.zIndex}
-    }
-  },
-  data() {
-    return {
-      popupId: null
-    }
-  },
-  beforeUnmount() {
-    this.removeFromStack()
-  },
-  methods: {
-    removeFromStack() {
-      document.removeEventListener('keydown', this.handleNavigationKeys)
-      const stack = this.editorState.openedPopups
-      const index = stack.lastIndexOf(this.popupId)
-      if (index >= 0) stack.splice(index, 1)
-    },
-    closeButtonClick() {
-      if (!this.forceButtonClose) {
-        this.closePopup()
-      } else {
-        this.$emit('cancel')
-      }
-    },
-    maybeClosePopup(event) {
-      if (event.target === this.$refs.wrapper) {
-        if (!this.forceButtonClose) {
-          this.closePopup()
-        }
-      }
-    },
-    closePopup() {
-      this.$emit("update:modelValue", false)
-      this.$emit("cancel")
-    },
-    handleNavigationKeys(event) {
-      if (!["Escape", "Enter"].includes(event.key)) {
-        return
-      }
-      this.$nextTick(() => {
-        if (this.editorState.openedPopups[this.editorState.openedPopups.length - 1] === this.popupId) {
-          switch (event.key) {
-            case "Escape":
-              this.closePopup()
-              break
-            case "Enter":
-              this.$emit("save")
-          }
-        }
-      })
+<script setup lang="ts">
+import { editorLockedKey } from '../editor-context.ts'
+import { inject, watch } from 'vue'
+import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle, VisuallyHidden } from 'reka-ui'
 
-    }
-  }
+defineOptions({ inheritAttrs: false })
+const props = withDefaults(defineProps<{
+   modelValue: boolean
+   title: string
+   zIndex?: string
+   fullHeight?: boolean
+   preventOutsideDismiss?: boolean
+   hideActions?: boolean
+   saveDisabled?: boolean
+}>(), { zIndex: '20', fullHeight: true })
+const emit = defineEmits<{ 'update:modelValue': [open: boolean]; cancel: []; save: [] }>()
+const editorLocked = inject(editorLockedKey)!
+let trigger: HTMLElement | null = null
+watch(() => props.modelValue, open => {
+   if (open) trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+}, { immediate: true })
+
+function cancel() {
+   emit('update:modelValue', false)
+   emit('cancel')
+}
+
+function maybePreventOutsideDismiss(event: Event) {
+   if (props.preventOutsideDismiss) event.preventDefault()
+}
+
+function restoreFocus(event: Event) {
+   if (!trigger?.isConnected) return
+   event.preventDefault()
+   trigger.focus()
 }
 </script>
 
-<style lang="scss" scoped>
-.modal {
-  display: flex;
-  position: fixed; /* Stay in place */
-  z-index: 2; /* Sit on top */
-  left: 0;
-  top: 0;
-  width: 100%; /* Full width */
-  height: 100%; /* Full height */
-  max-height: 100%;
-  overflow: hidden;
-  background-color: rgb(0, 0, 0); /* Fallback color */
-  background-color: rgba(0, 0, 0, 0.4); /* Black w/ opacity */
+<style scoped>
+.editor-dialog-overlay {
+   position: fixed;
+   inset: 0;
+   background: #0006;
 }
-
-/* Modal Content/Box */
-.modal-content {
-  position: relative;
-  width: 80%; /* Could be more or less, depending on screen size */
-  max-height: 70%;
-  margin: auto; /* 15% from the top and centered */
-  padding: 15px 12px;
-  border: 1px solid #888;
-  border-radius: 16px;
-  background-color: #fefefe;
-
-  &.full-height {
-    height: calc(100% - 60px);
-    max-height: calc(100% - 60px);
-    margin: 30px auto;
-  }
-
-  &.adjustable-height {
-    overflow-y: auto;
-    padding-bottom: 0;
-  }
+.editor-dialog {
+   position: fixed;
+   top: 50%;
+   left: 50%;
+   transform: translate(-50%, -50%);
+   width: 80%;
+   max-height: 70vh;
+   overflow-y: auto;
+   padding: 15px 12px;
+   border: 1px solid #888;
+   border-radius: 16px;
+   background: #fefefe;
 }
-
-/* The Close Button */
-.close {
-  color: #B6BFC9;
-  float: right;
-  font-size: 28px;
-
-  &:hover,
-  &:focus {
-    color: black;
-    text-decoration: none;
-    cursor: pointer;
-  }
+.editor-dialog.full-height { height: calc(100vh - 60px); max-height: calc(100vh - 60px); }
+.editor-dialog .close {
+   border: 0;
+   background: none;
+   padding: 0 4px;
+   color: #637383;
+   float: right;
+   font-size: 28px;
+   cursor: pointer;
 }
-
+.editor-dialog .close:hover { color: #000; }
 .default-actions {
-  display: flex;
-  flex-direction: row-reverse;
-  margin-top: 24px;
-  z-index: 1;
-
-  .adjustable-height & {
-    position: sticky;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    padding-bottom: 15px;
-    background-color: white;
-    box-shadow: 0px -5px 10px 0px rgb(255 255 255);
-  }
-
-  .full-height & {
-    position: absolute;
-    bottom: 15px;
-    right: 15px;
-  }
-
-  button {
-    margin-left: 16px;
-  }
+   display: flex;
+   flex-direction: row-reverse;
+   gap: 16px;
+   position: sticky;
+   bottom: 0;
+   margin-top: 24px;
+   padding: 8px 0;
+   background: #fff;
 }
 </style>

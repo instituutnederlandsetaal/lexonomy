@@ -8,7 +8,10 @@
     "allowJs": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
+    "paths": {
+      "@elexis-eu/xonomy": ["./node_modules/@elexis-eu/xonomy/dist/src/xonomy.d.ts"]
+    },
     "types": ["vite/client"]
   },
-  "include": ["app.js", "js/**/*.ts", "components/**/*.vue", "components/**/*.ts"]
+  "include": ["app.js", "js/**/*.ts", "components/**/*.vue", "components/**/*.ts", "widgets/**/*.ts"]
 }

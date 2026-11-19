@@ -1,134 +1,38 @@
 <template>
-  <div v-if="editorState.entry.dictConfigs && editorState.entry.dictConfigs.xemplate">
-    <ComponentGeneratorComponent
-      :children="preparedDataForEntry"
-      :content="dataStructure"
-      @input="handleContentUpdate"
-    />
-
-  </div>
+   <ComponentGeneratorComponent :children="rootChildren" :content="draft" @input="update"/>
 </template>
 
-<script>
-import ComponentGeneratorComponent from "./ComponentGeneratorComponent.vue"
-import {js2xml, xml2js} from "xml-js"
+<script setup lang="ts">
+import { editorContextKey, provideEditorDraft, requiredFieldsKey } from '../editor-context.ts'
+import { computed, inject, shallowRef } from 'vue'
+import type { Element } from 'xml-js'
+import ComponentGeneratorComponent from './ComponentGeneratorComponent.vue'
+import { elementId, serializeDraft } from '../editor-schema.ts'
 
-export default {
-  name: "EntryDisplay",
-  inject: ['editorState', 'requiredFields'],
-  components: {
-    ComponentGeneratorComponent
-  },
-  emits: ['dirty-change'],
-  watch: {
-    dirty(value) {
-      this.$emit('dirty-change', value)
-    }
-  },
-  computed: {
-    preparedDataForEntry() {
-      if (!this.editorState.entry.dictConfigs) {
-        return []
-      }
-      const content = this.editorState.entry.content
-      let rootName = (content.elements && content.elements[0] && content.elements[0].name) || this.editorState.entry.dictConfigs.xema.root
-      return [{
-        max: 1,
-        min: 1,
-        name: rootName
-      }]
-    }
-  },
-  data() {
-    return {
-      dataStructure: {},
-      dirty: false
-    }
-  },
-  created() {
-    this.dataStructure = this.editorState.entry.content
-    this.setHeadwordElement()
-  },
-  methods: {
-    setHeadwordElement() {
-      let config = this.editorState.entry.dictConfigs
-      let titling = config.titling
-      if (titling && titling.headword) {
-        this.editorState.headwordElement = titling.headword
-        return
-      }
-      let root = config.xema.root
-      if (root) {
-        let rootConfig = config.xema.elements[root]
-        if (rootConfig && rootConfig.children && rootConfig.children.length > 0) {
-          this.editorState.headwordElement = rootConfig.children[0].name
-        }
-      }
-    },
-    handleContentUpdate(data) {
-      this.dataStructure = data.content
-      this.dirty = this.areAnyChanges()
-    },
-    areAnyChanges() {
-      let structureCopy = this.createDeepCopy()
-      this.fixElementNames(structureCopy)
-      let updatedContent = js2xml(structureCopy, this.editorState.xml2jsConfig)
-      let initialContent = js2xml(this.editorState.initialContent, this.editorState.xml2jsConfig)
-      return initialContent != updatedContent
-    },
-    getXmlData() {
-      const missing = [...this.requiredFields].map(check => check()).filter(Boolean)
-      if (missing.length && !confirm(`Are you sure you want to save despite some elements missing? \n \n Missing fields: \n${missing.join('\n')}`)) {
-        return null
-      }
-      return this.prepareXMLData()
-    },
-    prepareXMLData() {
-      let structureCopy = this.createDeepCopy()
-      delete structureCopy.declaration
-      this.fixElementNames(structureCopy)
-      return js2xml(structureCopy, this.editorState.xml2jsConfig)
-    },
-    createDeepCopy() {
-      let xml = js2xml(this.dataStructure, this.editorState.xml2jsConfig)
-      return xml2js(xml, this.editorState.xml2jsConfig)
-    },
-    fixElementNames(structure) {
-      if (structure.name) {
-        let config = this.getStructureConfig(structure.name)
-        if (config && config.elementName) {
-          structure.name = config.elementName
-        }
-      }
-      if (structure.attributes) {
-        for (const attribute of Object.keys(structure.attributes)) {
-          let config = this.getStructureConfig(attribute, structure.name)
-          if (config && config.elementName) {
-            structure.attributes[config.elementName] = structure.attributes[attribute]
-            delete structure.attributes[attribute]
-          }
-        }
-      }
-      if (structure.elements) {
-        for (const element of structure.elements) {
-          this.fixElementNames(element)
-        }
-      }
-    },
-    getStructureConfig(elementName, parentElement = null) {
-      let config = this.editorState.entry.dictConfigs.xema.elements
-      if (!config[elementName]) {
-        return {}
-      }
-      if (parentElement) {
-        return config[parentElement].attributes[elementName]
-      }
-      return config[elementName] || {}
-    }
-  }
+const props = defineProps<{ content: Element; originalXml: string }>()
+const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
+const editor = inject(editorContextKey)!
+const requiredFields = inject(requiredFieldsKey)!
+const draft = shallowRef(props.content)
+const originalDraft = serializeDraft(props.content)
+const rootChildren = computed(() => {
+   const { xema } = editor.config
+   const root = props.content.elements?.find(node => node.type === 'element')
+   return [{ name: (root && elementId(xema, root)) || xema.root }]
+})
+
+provideEditorDraft(() => draft.value, content => update({ content }))
+defineExpose({ harvest })
+
+function update({ content }: { content: Element }) {
+   draft.value = content
+   emit('dirty-change', serializeDraft(content) !== originalDraft)
+}
+
+function harvest() {
+   const missing = [...requiredFields].map(check => check()).filter(Boolean)
+   if (missing.length && !window.confirm(`Save with these required fields empty?\n\n${missing.join('\n')}`)) return null
+   const xml = serializeDraft(draft.value)
+   return xml === originalDraft ? props.originalXml : xml
 }
 </script>
-
-<style scoped>
-
-</style>

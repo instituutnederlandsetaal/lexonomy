@@ -1,5 +1,5 @@
 <template>
-<userprofile>
+<div class="userprofile">
    <h1>Account settings</h1>
    <form class="row" @submit.prevent="changePassword">
       <p role="status">{{ message }}</p>
@@ -20,12 +20,10 @@
       </div>
    </form>
    <div>
-      <a class="btn"
-            :href="$router.resolve({ name: 'home' }).href"
-            @click.prevent="$router.back()">Back</a>
+      <RouterLink :to="{ name: 'home' }" class="btn">Your dictionaries</RouterLink>
    </div>
 
-</userprofile>
+</div>
 </template>
 
 <script setup lang="ts">

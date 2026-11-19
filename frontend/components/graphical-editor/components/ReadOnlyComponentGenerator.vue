@@ -1,175 +1,38 @@
 <template>
-  <div>
-    <section v-for="element in renderedChildren"
-             :key="element.props.key"
-             class="component drop-shadow--100"
-             @click="$emit('selected-element', element)"
-    >
-      <component
-        :is="editorComponents[element.componentName]"
-        :ref="element.props.elementName + element.props.editorChildNumber"
-        v-bind="element.props"
-        :showElementsPreview="true"
-        :maxDisplayedChildren="5"
-        :class="{'is-attribute': element.props.isAttribute}"
-      />
-    </section>
-  </div>
+   <div>
+      <section v-for="(candidate, index) in content" :key="index" class="component drop-shadow--100"
+               role="button" tabindex="0" @click="emit('selected-element', candidate)"
+               @keydown.enter.prevent="emit('selected-element', candidate)"
+               @keydown.space.prevent="emit('selected-element', candidate)">
+         <InlineComponent :element-name="candidate.elementName" :content="candidate.node"
+                    :children="childrenFor(xema, candidate.elementName, candidate.node)"
+                    :element-data="{ ...elementDisplay(config.xemplate, xema, candidate.elementName), hideElementName: false }"
+                    :parent-element-name="candidate.parentElementName" :editor-child-number="0" :number-of-elements="1"
+                    show-elements-preview :max-displayed-children="5"/>
+      </section>
+   </div>
 </template>
 
-<script>
+<script setup lang="ts">
+import { editorContextKey } from '../editor-context.ts'
+import { computed, inject } from 'vue'
+import { childrenFor, elementDisplay, type ParentCandidate } from '../editor-schema.ts'
+import InlineComponent from './displayTypes/InlineComponent.vue'
 
-export default {
-  inject: ['editorState', 'editorComponents'],
-  name: "ReadOnlyComponentGenerator",
-  emits: ['selected-element'],
-  props: {
-    children: Array,
-    elementName: String,
-    content: {
-      type: [Object, Array],
-      required: true
-    }
-  },
-  data() {
-    return {
-      renderedChildren: []
-
-    }
-  },
-  watch: {
-    content: {
-      handler(newVal) {
-        this.loadNewData(newVal)
-      },
-      deep: true
-    }
-  },
-  created() {
-    //  create components from content
-    this.loadNewData(this.content)
-  },
-  methods: {
-    loadNewData(XMLContent) {
-      this.renderedChildren = []
-      if (!this.children) {
-        return
-      }
-      XMLContent.forEach(child => {
-        // eslint-disable-next-line no-debugger
-        // debugger
-        // Get element name
-        let elementName = child.name
-
-        //Extract element data and/or assign defaults
-        let elementData = this.getElementData(elementName, child.parentName, child.isAttribute)
-        elementData.hideElementName = false
-        // Calculate component name to render
-        // !!!MUST WAIT FOR NEW ELEMENT DATA TO SET!!!
-        let componentName = "InlineComponent"
-
-
-        //  Get XML content for current element instance
-        let content = child
-        // Decide if multiple instances need to be made and push children to array to be rendered
-
-
-        this.renderedChildren.push({
-          componentName: componentName,
-          props: {
-            elementName: elementName,
-            children: this.getElementChildren(elementName, content),
-            content: content,
-            elementData: elementData,
-            editorChildNumber: 0,
-            parentElementName: this.elementName,
-            numberOfElements: 1,
-            isAttribute: child.isAttribute,
-            showElementsPreview: this.showElementsPreview,
-            key: Math.random()
-          }
-        })
-
-      })
-    },
-    getElementChildren(elementName, content) {
-      let elementInXema = this.editorState.entry.dictConfigs.xema.elements[elementName]
-      let children = elementInXema && elementInXema.children
-      if (elementInXema && Object.keys(elementInXema.attributes || {}).length > 0) {
-        let mappedAttributes = Object.keys(elementInXema.attributes).map(att => {
-          return {name: att, isAttribute: true}
-        })
-        children = mappedAttributes.concat(children)
-      }
-      if (content.elements) {
-        let elemntsInContent = content.elements.filter(el => !!el.name)
-        let differentElementsInXMLContent = elemntsInContent.map((value) => value.name).filter((value, index, _arr) => _arr.indexOf(value) === index).length
-        if (!elementInXema || differentElementsInXMLContent !== (elementInXema.children && elementInXema.children.length) || 0) {
-          let artificialChildren = []
-          if (elemntsInContent) {
-            artificialChildren = elemntsInContent.map(element => {
-              return {min: 1, max: 1, name: element.name}
-            })
-          }
-          children = children || []
-          for (const child of artificialChildren) {
-            if (!children.find(el => el.name === child.name)) {
-              children.push(child)
-            }
-          }
-        }
-      }
-      return children
-    },
-
-    getElementData(elementName, parentName, isAttribute) {
-      let formatterConfig = this.editorState.entry.dictConfigs.xemplate
-      let elementData
-      if (isAttribute) {
-        elementData = formatterConfig[parentName].attributes && formatterConfig[parentName].attributes[elementName]
-      } else {
-        elementData = formatterConfig[elementName]
-      }
-
-      if (!elementData) {
-        elementData = {
-          shown: true,
-          displayType: "inline",
-          valueRenderType: "text-input"
-        }
-      } else {
-        if (!("shown" in elementData)) {
-          elementData.shown = true
-        }
-        if (!("displayType" in elementData)) {
-          elementData.displayType = "inline"
-        }
-        if (!("valueRenderType" in elementData)) {
-          elementData.valueRenderType = "text-input"
-        }
-      }
-      return elementData
-    }
-  }
-}
+defineProps<{ content: ParentCandidate[] }>()
+const emit = defineEmits<{ 'selected-element': [candidate: ParentCandidate] }>()
+const editor = inject(editorContextKey)!
+const config = computed(() => editor.config)
+const xema = computed(() => config.value.xema)
 </script>
 
-<style lang="scss" scoped>
+<style scoped>
 .component {
-  display: flex;
-  margin: 8px;
-  padding: 8px;
-  text-align: left;
-  cursor: pointer;
-  transition: 0.3s all;
-
-  &:hover {
-    box-shadow: 0px 2px 14px rgba(24, 24, 24, 0.2);
-  }
+   display: flex;
+   margin: 8px;
+   padding: 8px;
+   text-align: left;
+   cursor: pointer;
 }
-.is-attribute {
-  padding: 0 !important;
-  padding-left: 4px !important;
-  margin: 0;
-}
+.component:hover, .component:focus-visible { box-shadow: 0 2px 14px #18181833; }
 </style>

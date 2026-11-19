@@ -2,11 +2,14 @@
 <div class="account-password">
    <LoadingOverlay v-if="checking || submitting"/>
    <p v-if="checking && registering">Validating signup token...</p>
-   <div v-if="!checking && !valid" class="section message messageError" role="alert">
+   <div v-if="verificationFailed" class="section message messageError" role="alert">
+      Could not check this link. Reload the page to try again.
+   </div>
+   <div v-else-if="!checking && !valid" class="section message messageError" role="alert">
       This {{ registering ? 'signup' : 'recovery' }} link is invalid. It may have expired or has been used before.
    </div>
    <div v-if="failed" class="section message messageError" role="alert">
-      {{ registering ? 'Error while creating account.' : 'Error while accessing account.' }}
+      {{ registering ? 'Error while creating account.' : 'Could not reset your password.' }}
    </div>
    <p v-if="saved && registering" role="status">
       We have created your account.
@@ -39,6 +42,7 @@ const props = defineProps<{ action: 'register' | 'recovery', token?: string }>()
 const registering = computed(() => props.action === 'register')
 const checking = ref(true)
 const valid = ref(false)
+const verificationFailed = ref(false)
 const saved = ref(false)
 const failed = ref(false)
 const submitting = ref(false)
@@ -46,8 +50,12 @@ const submitting = ref(false)
 onMounted(async () => {
    if (props.token) {
       const data = { token: props.token, type: props.action }
-      const response = await api.post<AuthResult>('verifytoken.json', data).catch(() => null)
-      valid.value = response?.success === true
+      try {
+         const response = await api.post<AuthResult>('verifytoken.json', data)
+         valid.value = response.success === true
+      } catch {
+         verificationFailed.value = true
+      }
    }
    checking.value = false
 })

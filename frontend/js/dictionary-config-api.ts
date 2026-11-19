@@ -11,7 +11,8 @@ export type DictionarySettings = {
       string_template?: string; number_globally?: boolean; number_next?: number;
       overwrite_existing?: boolean; auto_apply?: boolean }>
    download: { xslt?: string }
-   editing: { xonomyMode: 'nerd' | 'laic' | 'graphical'; xonomyTextEditor?: string; _css?: string; _js?: string }
+   editing: { xonomyMode: 'nerd' | 'laic' | 'graphical'; xonomyTextEditor?: string;
+      editorApiVersion?: 1 | null; _css?: string; _js?: string }
    flagging: { flag_element: string; flags: Flag[] }
    ident: { title: string; blurb: string; lang: string; handle: string; langs?: LabelledCode[] }
    links: Record<string, { linkElement: string; identifier: string; preview: string }>

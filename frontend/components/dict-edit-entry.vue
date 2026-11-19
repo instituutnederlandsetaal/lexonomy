@@ -57,6 +57,10 @@
                <GraphicalEditor v-if="graphical" ref="graphicalEditor"
                   :xml="entry?.content || initialXml" :config="config" :dict-id="dictId" :user-dicts="userDicts"
                   @dirty-change="markDirty" @links-changed="refreshLinks"/>
+               <CustomEntryEditor v-else-if="extensionSource" ref="customEditor" :source="extensionSource"
+                  :entry="editorEntry" :config="config" :dict-id="dictId" :initial-xml="initialXml"
+                  :read-only="!isEditing || !canEdit"
+                  @dirty-change="markDirty" @open-entry="openRelatedEntry" @mount-failed="fallBackToBuiltIn"/>
                <LegacyEditor v-else-if="dictId" ref="legacyEditor" :entry="editorEntry" :config="config" :dict-id="dictId" :user-dicts="userDicts"
                   :readonly="!isEditing || !canEdit"
                   :initial-xml="editorEntry.content || initialXml"
@@ -134,6 +138,7 @@ import { parseXml } from '../js/xml.ts'
 import { initialDocument, parseDTD } from '../libs/xonomy-tools/dtdconvert/dtd2xonomy.js'
 import { createInitialXml } from '../widgets/xematron.ts'
 import { entryHtml } from '../widgets/xemplatron.ts'
+import CustomEntryEditor from './entry-editor/CustomEntryEditor.vue'
 import EntryLinks from './entry-editor/EntryLinks.vue'
 import { confirmEntryNavigation, unsavedEntry } from './entry-editor/unsaved.js'
 import GraphicalEditor from './graphical-editor/GraphicalEditor.vue'
@@ -161,6 +166,7 @@ const router = useRouter()
 
 const container = ref<HTMLElement | null>(null)
 const sourceInput = ref<HTMLTextAreaElement | null>(null)
+const customEditor = ref<InstanceType<typeof CustomEntryEditor> | null>(null)
 const legacyEditor = ref<InstanceType<typeof LegacyEditor> | null>(null)
 const graphicalEditor = ref<InstanceType<typeof GraphicalEditor> | null>(null)
 const entryLinks = ref<InstanceType<typeof EntryLinks> | null>(null)
@@ -184,6 +190,7 @@ const invalidSource = ref(false)
 let requestedKey: string | undefined
 let draftVersion = 0
 const revision = ref(0)
+const failedExtensionRevision = ref<number>()
 const config = computed(() => {
    const { xema } = props.dictionaryConfig
    const { doctype } = props
@@ -208,8 +215,10 @@ const initialXml = computed(() => {
    const { xema } = config.value
    return xema._newXml || xema.newXml || (xema._dtd && initialDocument(parseDTD(xema._dtd))) || createInitialXml(xema)
 })
-const graphical = computed(() => isEditing.value && props.canEdit &&
-   editing.value.xonomyMode === 'graphical' && (!editing.value._js || useGraphical.value))
+const extensionSource = computed(() => editing.value.editorApiVersion === 1 && failedExtensionRevision.value !== revision.value
+   ? editing.value._js : undefined)
+const graphical = computed(() => isEditing.value && props.canEdit && editing.value.xonomyMode === 'graphical' &&
+   !extensionSource.value && (!editing.value._js || editing.value.editorApiVersion != null || useGraphical.value))
 const editorEntry = computed(() => {
    if (surface.value === 'history') return previewHistory.value ? null : selectedRevision.value
    return isEditing.value ? entry.value ?? { content: '' } : null
@@ -242,6 +251,11 @@ function showLinkTarget() {
 function showStatus(text = 'Ready.', style = '') {
    status.value = text
    statusStyle.value = style
+}
+
+function fallBackToBuiltIn() {
+   failedExtensionRevision.value = revision.value
+   showStatus('The custom editor failed to open. Using the built-in editor.', 'warn')
 }
 
 function markDirty(value = true) {
@@ -364,7 +378,7 @@ function toggleEditing() {
 async function harvest() {
    const requestRevision = revision.value
    try {
-      const content: unknown = await (graphicalEditor.value || legacyEditor.value)?.harvest()
+      const content: unknown = await (customEditor.value || graphicalEditor.value || legacyEditor.value)?.harvest()
       return typeof content === 'string' ? content : null
    } catch {
       if (requestRevision === revision.value) showStatus('Failed to read editor content.', 'warn')

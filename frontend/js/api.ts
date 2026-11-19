@@ -26,20 +26,20 @@ function endpointUrl(path: string, query?: Fields) {
    return url
 }
 
-async function request(path: string, query?: Fields, body?: URLSearchParams | FormData) {
+async function request(path: string, query?: Fields, body?: URLSearchParams | FormData, signal?: AbortSignal) {
    const url = endpointUrl(path, query)
-   const response = await fetch(url, { method: body ? 'POST' : 'GET', body, cache: 'no-store' })
+   const response = await fetch(url, { method: body ? 'POST' : 'GET', body, cache: 'no-store', signal })
    if (!response.ok) throw new Error(`${url.pathname} returned HTTP ${response.status}`)
    return response
 }
 
 export const api = {
    url: endpointUrl,
-   async get<T = unknown>(path: string, query?: Fields): Promise<T> {
-      return (await request(path, query)).json()
+   async get<T = unknown>(path: string, query?: Fields, signal?: AbortSignal): Promise<T> {
+      return (await request(path, query, undefined, signal)).json()
    },
-   async post<T = unknown>(path: string, data: Fields | FormData = {}): Promise<T> {
-      return (await request(path, undefined, data instanceof FormData ? data : formFields(data))).json()
+   async post<T = unknown>(path: string, data: Fields | FormData = {}, signal?: AbortSignal): Promise<T> {
+      return (await request(path, undefined, data instanceof FormData ? data : formFields(data), signal)).json()
    },
    async text(path: string, query?: Fields): Promise<string> {
       return (await request(path, query)).text()

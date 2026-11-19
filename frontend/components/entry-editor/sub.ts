@@ -1,6 +1,7 @@
 import subentryIcon from '../../assets/furniture/favicon.png'
 import $ from 'jquery'
 import type { Xonomy, XonomyDocSpecExternal, XonomyMenuActionExternal, XonomyWhat } from '@elexis-eu/xonomy'
+import { subentryReferenceXml } from '../../js/editor-extension.ts'
 import { entryEditorApi, type RelatedEntry } from '../../js/entry-editor-api.ts'
 import { sanitizeHtml } from '../../js/sanitize-html.ts'
 import type { WorkspaceConfig } from '../../js/dictionary-workspace.ts'
@@ -154,10 +155,8 @@ export function createSubentryTools(editor: Xonomy, dictId: string, config: Pick
       box.find('.insert').on('click', () => {
          for (const [input, entry] of matches) {
             if (!input.checked) continue
-            const { id, title, doctype } = entry
-            children.set(id, entry)
-            const escape = (value: string | number) => editor.xmlEscape(String(value))
-            editor.newElementChild(htmlID, `<lxnm:subentryParent xmlns:lxnm="http://www.lexonomy.eu/" id="${escape(id)}" doctype="${escape(doctype)}" title="${escape(title)}"/>`)
+            children.set(entry.id, entry)
+            editor.newElementChild(htmlID, subentryReferenceXml(entry))
          }
       })
       const anchor: Partial<Record<XonomyWhat, string>> = {

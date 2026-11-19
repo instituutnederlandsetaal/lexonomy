@@ -14,7 +14,7 @@ export type EditorEntry = EntryRendering & {
    parententries?: RelatedEntry[]
 }
 export type EntryDraft = Omit<EditorEntry, 'id'> & { id?: number }
-type LoadedEntry = EditorEntry & RelatedEntry
+export type LoadedEntry = EditorEntry & RelatedEntry
 export type EntryRevision = EntryRendering & {
    schemaId?: string
    entry_id: number
@@ -33,8 +33,8 @@ type LinkDetails = Pick<EntryLink, 'source_el' | 'source_id' | 'target_dict' | '
 export type EntryLinks = { in: EntryLink[]; out: EntryLink[] }
 
 export const entryEditorApi = {
-   read(dictId: string, id: number) {
-      return api.post<(LoadedEntry & { success: true }) | Failure>(dictionaryPath(dictId, 'entryread.json'), { id })
+   read(dictId: string, id: number, signal?: AbortSignal) {
+      return api.post<(LoadedEntry & { success: true }) | Failure>(dictionaryPath(dictId, 'entryread.json'), { id }, signal)
    },
    save(dictId: string, content: string, id?: number) {
       return api.post<SavedEntry | Failure>(dictionaryPath(dictId, id ? 'entryupdate.json' : 'entrycreate.json'), { id, content })
@@ -45,9 +45,9 @@ export const entryEditorApi = {
    history(dictId: string, id: number) {
       return api.post<{ history: EntryRevision[] }>(dictionaryPath(dictId, 'history.json'), { id })
    },
-   subentries(dictId: string, lemma: string, doctype: string, schemaId?: string) {
+   subentries(dictId: string, lemma: string, doctype: string, schemaId?: string, signal?: AbortSignal) {
       return api.get<{ success: true; total: number; entries: RelatedEntry[] } | Failure>(
-         dictionaryPath(dictId, 'subget'), { lemma, doctype, schemaId }
+         dictionaryPath(dictId, 'subget'), { lemma, doctype, schemaId }, signal
       )
    },
    links(dictId: string, id: number) {

@@ -50,31 +50,19 @@ onMounted(() => {
    const root = element.value
    if (!root) return
    const { xema, xemplate, subbing, titling, flagging, linking, editing } = props.config
-   const context = {
-      $: jquery, jQuery: jquery, Cookies: cookies, XonomyExports, API_URL: basePath,
-      Xemplatron: {
-         ...Xemplatron,
-         xml2html: (...[xml, template, schema]: Parameters<typeof Xemplatron.xml2html>) =>
-            Xemplatron.xml2html(xml, template, schema, crossReferenceHref)
-      },
-      Xematron: {
-         xema2docspec: (schema: Xema, asker?: string) => createDocSpec(editor, schema, asker),
-         xema2xml: createInitialXml,
-         initialElement: createInitialElement,
-      },
-      xema, xemplate, subbing, titling, flagging, linking, editing,
-      dictId: props.dictId, userDicts: props.userDicts
+   const previous = new Map<string, PropertyDescriptor | undefined>()
+   const setGlobals = (context: Record<string, unknown>) => {
+      for (const key of Object.keys(context)) previous.set(key, Object.getOwnPropertyDescriptor(window, key))
+      Object.assign(window, context)
    }
-   // Stored custom editors and Xonomy's legacy event handlers access this context by name.
-   const previous = new Map([...Object.keys(context), 'Xonomy', 'Sub', 'Xrefs']
-      .map(key => [key, Object.getOwnPropertyDescriptor(window, key)]))
    restoreGlobals = () => {
       for (const [key, descriptor] of previous) {
          if (descriptor) Object.defineProperty(window, key, descriptor)
          else Reflect.deleteProperty(window, key)
       }
    }
-   Object.assign(window, context)
+   // Xonomy's distributed build uses a global $ even when created as an ES module instance.
+   setGlobals({ $: jquery })
    const editor = xonomy = new XonomyClass()
    const setFocus = editor.setFocus.bind(editor)
    // Xonomy schedules focus after edits, including when the editor has since unmounted.
@@ -83,12 +71,31 @@ onMounted(() => {
    }
    const subentries = createSubentryTools(editor, props.dictId, props.config, (id, doctype) => emit('open-entry', id, doctype))
    const xrefs = createCrossReferenceTools(editor, props.dictId, props.userDicts, linking, emit)
-   Object.assign(window, { Xonomy: editor, Sub: subentries, Xrefs: xrefs })
    editor.buttonClass = 'btn'
    editor.lang = 'en'
    Object.assign(editor, { baseUrl: basePath })
 
-   const custom = readCustomEditor(editing._js)
+   const customSource = editing.editorApiVersion == null ? editing._js : undefined
+   if (customSource || xema._xonomyDocSpec) {
+      // Older stored scripts and document specifications access these names on window.
+      setGlobals({
+         jQuery: jquery, Cookies: cookies, XonomyExports, API_URL: basePath,
+         Xonomy: editor, Sub: subentries, Xrefs: xrefs,
+         Xemplatron: {
+            ...Xemplatron,
+            xml2html: (...[xml, template, schema]: Parameters<typeof Xemplatron.xml2html>) =>
+               Xemplatron.xml2html(xml, template, schema, crossReferenceHref)
+         },
+         Xematron: {
+            xema2docspec: (schema: Xema, asker?: string) => createDocSpec(editor, schema, asker),
+            xema2xml: createInitialXml,
+            initialElement: createInitialElement,
+         },
+         xema, xemplate, subbing, titling, flagging, linking, editing,
+         dictId: props.dictId, userDicts: props.userDicts
+      })
+   }
+   const custom = readCustomEditor(customSource)
    if (typeof custom?.editor === 'function' && typeof custom.harvester === 'function') {
       try {
          custom.editor(root, { ...props.entry, content: props.initialXml }, Boolean(props.readonly))

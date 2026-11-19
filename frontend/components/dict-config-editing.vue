@@ -105,18 +105,24 @@
       </div>
       <div v-if="override">
          <div class="row">
+            <label for="editor_api_version">JavaScript format</label>
+            <select id="editor_api_version" class="browser-default" v-model="draft.editorApiVersion">
+               <option :value="null">Legacy editor script</option>
+               <option :value="1">Editor extension (v1)</option>
+            </select>
             <div class="input-field">
                <div id="codeStatus">
-                  <b :class="codeError ? 'red-text' : 'green-text'">{{ codeError ? 'invalid' : 'valid' }}</b>
+                  <b :class="codeError ? 'red-text' : 'green-text'">{{ codeError ? 'invalid syntax' : 'valid syntax' }}</b>
                   <span v-if="codeError" class="grey-text right">{{ codeError }}</span>
                </div>
                <textarea id="editor_js"
                      rows="7" class="materialize-textarea"
                      v-model="draft._js"></textarea>
-               <label>JavaScript</label>
+               <label for="editor_js">JavaScript</label>
                <span class="helper-text">
-                  You can customize the editor by defining two functions in JavaScript: one that will render the HTML editor from the XML entry and one that will harvest the (edited) HTML back into XML. If you would like to see an example,
+                  Editor extensions receive the entry and schema when mounted and return a function to read the edited XML.
                   <button type="button" class="btn-flat" @click="exampleJS">Load sample JavaScript</button>
+                  <a :href="extensionDocs" target="_blank" rel="noopener">Editor extension guide</a>
                </span>
             </div>
          </div>
@@ -145,6 +151,8 @@
 </template>
 
 <script setup lang="ts">
+import { basePath } from '../js/api.ts'
+import { compileEditorExtension } from '../js/editor-extension.ts'
 import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
@@ -153,7 +161,10 @@ import { computed, ref } from 'vue'
 import type { DictionarySettings } from '../js/dictionary-config-api.ts'
 
 const props = defineProps<{ dictId: string }>()
-const defaults: DictionarySettings['editing'] = { xonomyMode: 'nerd', xonomyTextEditor: 'askString', _js: '', _css: '' }
+const defaults: DictionarySettings['editing'] = {
+   xonomyMode: 'nerd', xonomyTextEditor: 'askString', editorApiVersion: null, _js: '', _css: ''
+}
+const extensionDocs = basePath + 'docs/editor-extensions.md'
 const draft = ref({ ...defaults })
 const override = ref(false)
 const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'editing', content => {
@@ -164,7 +175,8 @@ const { loading, ready, saving, load, save } = useDictionarySetting(() => props.
 const codeError = computed(() => {
    if (!override.value || !draft.value._js) return ''
    try {
-      new Function('return ' + draft.value._js)
+      if (draft.value.editorApiVersion === 1) compileEditorExtension(draft.value._js)
+      else new Function('return ' + draft.value._js)
       return ''
    } catch (error) {
       return String(error).split('\n')[0]
@@ -173,47 +185,27 @@ const codeError = computed(() => {
 
 function saveData() {
    if (codeError.value) return
-   return save(override.value ? draft.value : { ...draft.value, _js: '', _css: '' })
+   return save(override.value ? draft.value : { ...draft.value, editorApiVersion: null, _js: '', _css: '' })
 }
 
 function exampleJS() {
+   draft.value.editorApiVersion = 1
    draft.value._js = `{
-        editor: function(div, entry, uneditable){
-          //div = the div into which you should render the editor
-          //entry.id = the entry ID (a number, eg. 123), or zero if new entry
-          //entry.content = the entry's XML source code, eg. "<entry><headword>hello</headword></entry>"
-          //uneditable = true if we want the entry to be uneditable (read-only)
-          $(div).html("<div class='myEditor'>HEADWORD: <input class='headword' "+(uneditable?"disabled":"")+"/></div>");
-          $(div).find("input.headword").val($($.parseXML(entry.content)).find("headword").html());
-        },
-        harvester: function(div){
-          //div = the div from which you should harvest the contents of the editor
-          var headword=$(div).find("input.headword").val();
-          return "<entry><headword>"+headword+"</headword></entry>";
-        },
-        adjustDocSpec: function (docSpec) {
-          // NOTE: you normally want to use this method if you don't have a custom editor,
-          // but just want to change certain aspects of how Xonomy presents the document.
-          $.each(docSpec.elements, function (elementName, elementSpec) {
-            // Expand <sense> elements by default.
-            if (elementName === 'sense') {
-              elementSpec.collapsed = function (jsElement) { return false; }
-            }
-            // Make <example> read-only
-            if (elementName === 'example') {
-              elementSpec.isReadOnly = true;
-            }
-            // Hide <partOfSpeech>.
-            if (elementName === 'partOfSpeech') {
-              elementSpec.isInvisible = true;
-            }
-          });
-        }
-      }`
+   mount({ element, entry, readOnly, signal, markDirty }) {
+      const input = document.createElement('textarea')
+      input.className = 'myEditor'
+      input.setAttribute('aria-label', 'Entry XML')
+      input.value = entry.content
+      input.readOnly = readOnly
+      input.addEventListener('input', markDirty, { signal })
+      element.append(input)
+      return { harvest: () => input.value }
+   }
+}`
 }
 
 function exampleCSS() {
-   draft.value._css = 'div.myEditor {padding: 20px; font-size: 1.25em}\ndiv.myEditor input {font-weight: bold}'
+   draft.value._css = '#editor textarea.myEditor {min-height: 12rem; font-family: monospace}'
 }
 </script>
 

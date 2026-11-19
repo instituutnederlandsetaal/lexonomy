@@ -1,14 +1,14 @@
-FROM node:22-alpine AS builder
+FROM node:22-alpine AS frontend
 WORKDIR /opt/service/website
 
 COPY website/package.json website/package-lock.json ./
-COPY website/editor/package.json website/editor/package-lock.json ./editor/
-RUN --mount=type=cache,target=/root/.npm npm ci && npm --prefix editor ci
-
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY website/ ./
-RUN npm run build
 
-FROM python:3.12-alpine3.24
+ARG VER=dev
+RUN VITE_LEXONOMY_VERSION="$VER" npm run build
+
+FROM python:3.12-alpine3.24 AS backend
 WORKDIR /opt/service/website
 
 COPY website/requirements.txt ./
@@ -18,17 +18,13 @@ RUN apk add --no-cache icu libxslt \
     && apk del .build-deps
 
 COPY website/ ./
-COPY --from=builder /opt/service/website/dist ./dist
-
-ARG VER=dev
-RUN case "$VER" in \
-        ''|*[!A-Za-z0-9_.-]*) echo 'VER must contain letters, digits, dots, underscores, or hyphens only' >&2; exit 1 ;; \
-    esac \
-    && mkdir -p ../data \
-    && cp siteconfig.json.template siteconfig.json \
-    && cp config.js.template config.js \
-    && printf '%s\n' "$VER" > version.txt \
-    && sed -i "s/@VERSION@/$VER/g" index.html
+RUN mkdir -p ../data && cp siteconfig.json.template siteconfig.json
 
 EXPOSE 8000
 CMD ["sh", "-c", "python adminscripts/init.py && python adminscripts/updates.py && python migrate.py && exec python lexonomy.py 0.0.0.0:8000"]
+
+FROM backend AS production
+COPY --from=frontend /opt/service/website/dist ./dist
+
+ARG VER=dev
+RUN printf '%s\n' "$VER" > version.txt

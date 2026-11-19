@@ -9,13 +9,48 @@ docker compose up --build -d
 docker compose logs lexonomy
 ```
 
-Open [http://localhost:8000/](http://localhost:8000/). On first startup, the logs show the generated password for `root@localhost`. `docker compose down` stops Lexonomy and keeps its database in the `lexonomy_data` volume.
+Open [http://localhost:8000/](http://localhost:8000/). With the default configuration and a fresh database, the logs show a **Lexonomy setup code**. Enter it on the setup screen and choose a password for `root@localhost`. Use the most recent code if the container restarted before setup finished. `docker compose down` stops Lexonomy and keeps its database in the `lexonomy_data` volume.
 
 Set `VER` when building to use a different image tag and display version. The default is `dev`.
 
+## Frontend development
+
+Use Node.js 22.12 or newer. From `website`, install dependencies and start the Vite server.
+
+```sh
+npm ci
+npm start
+```
+
+Open [http://localhost:5173/](http://localhost:5173/). Vite applies Vue changes as you save and proxies application requests to `http://127.0.0.1:8000` by default. Start the Python backend separately using the source installation steps below, or point Vite at a running installation.
+
+```sh
+LEXONOMY_BACKEND_URL=http://127.0.0.1:9000 npm start
+LEXONOMY_BACKEND_URL=https://lexonomy.example.org/lexonomy/ npm start
+```
+
+The target can include a path. The browser sends login, edits, imports, and other requests through the dev server to that target. If you point at production, writes affect production data.
+
+### Docker development
+
+From the repository root, start the Python backend and Vite together.
+
+```sh
+docker compose -f docker-compose.dev.yml up --build
+```
+
+Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/). On first startup, use the setup code from the backend logs to create `root@localhost`. Both containers load the local source with live reload. The dev stack uses its own SQLite volume. Set `FRONTEND_PORT` to change the published port.
+
+To use another installation, start just the frontend service and set the backend URL. Inside Docker, use `host.docker.internal` to reach a service exposed on the Docker host.
+
+```sh
+LEXONOMY_BACKEND_URL=http://host.docker.internal:8000 docker compose -f docker-compose.dev.yml up frontend
+LEXONOMY_BACKEND_URL=https://lexonomy.example.org/lexonomy/ docker compose -f docker-compose.dev.yml up frontend
+```
+
 ## Install from source
 
-Use Python 3.12 and Node.js 22 to match the Docker build. PyICU requires ICU development libraries, `pkg-config`, and a C++ compiler when it builds from source.
+Use Python 3.12 and Node.js 22.12 or newer. PyICU requires ICU development libraries, `pkg-config`, and a C++ compiler when it builds from source.
 
 ```sh
 cd website
@@ -23,17 +58,15 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 cp siteconfig.json.template siteconfig.json
-cp config.js.template config.js
 npm ci
-npm --prefix editor ci
 npm run build
 ```
 
-The frontend build writes to `website/dist`. During development, `npm run watch` rebuilds Riot on changes and starts the graphical editor's dev server. Set `window.GRAPHICAL_EDITOR_WEBPACK_DEV_SERVER_URL` in `website/config.js` to use that server.
+Vite writes `index.html` and assets with content hashes to `website/dist/`. Bottle serves this build and the API from the same origin. You can skip the frontend build if you only use the Vite dev server.
 
 ## Configuration
 
-Set `window.API_URL` in `website/config.js` to the backend URL. It usually matches `baseUrl` in `website/siteconfig.json`. Set `LEXONOMY_SITECONFIG` to load a different backend configuration. To customize Compose, point its two configuration mounts at your own copies of the templates.
+Set `LEXONOMY_SITECONFIG` to load a different backend configuration. To customize the production Compose service, point its configuration mount at your own copy of the template. For Docker development, set `LEXONOMY_DEV_SITECONFIG` to the name of a configuration file inside `website`.
 
 ### Base URL
 
@@ -105,24 +138,23 @@ This is the welcome message displayed on the home page of your Lexonomy installa
 "admins": ["root@localhost"]
 ```  
 
-This is an array of one or more e-mail addresses. People listed here are administrators: they can access everything in Lexonomy (including other people's dictionaries) and, after they log in, they will see options to create/change/delete user accounts, which other users don't see. You probably want to change this to your own e-mail address, like `joebloggs@example.com`.
+Accounts listed here can administer the installation. Browser setup creates `root@localhost` when that address is configured and the database has no administrator. For other configured admin addresses, the initializer creates missing accounts and prints their initial passwords.
 
 ## Start a source installation
 
-From `website`, create your configured `dataDir` and initialize the databases. The initialization script prints the passwords for newly created administrators.
+From `website`, initialize and upgrade the databases, then start the server.
 
 ```sh
-mkdir -p ../data
 python3 adminscripts/init.py
 python3 adminscripts/updates.py
 python3 migrate.py
 python3 lexonomy.py
 ```
 
-Open [http://localhost:8000/](http://localhost:8000/) with the default configuration. For subsequent upgrades, rebuild the frontend and run `adminscripts/updates.py` and `migrate.py` before restarting the server. Docker runs these steps on startup.
+Open [http://localhost:8000/](http://localhost:8000/) with the default configuration. Enter the setup code printed by the initializer to create `root@localhost`. For subsequent upgrades, rebuild the frontend and run the same startup commands. Docker runs the database scripts before starting the server.
 
 Accounts created through Sketch Engine can set a local password through **Forgot password?** when email is configured. An administrator with server access can also set a password with `python3 adminscripts/changePassword.py user@example.com` from `website`.
 
-## Run the import tests
+## Run the tests
 
-After installing the Python requirements, run `python3 test-import.py` from `website`. The tests create their own temporary databases.
+After installing the Python requirements, run `python3 test-import.py` and `python3 test-initial-admin.py` from `website`. Both suites create their own temporary databases.

@@ -848,6 +848,21 @@ for tests in testables:
         else:
             traceback.print_exc()
 
+try:
+    xml = '<entry xmlns:lxnm="http://www.lexonomy.eu/"><lxnm:subentryParent id="101"/></entry>'
+    markup = ops.get_entry_rendering(dictDB, xml, ops.get_xslt_transformer(None))
+    assert "subentry headword edited" in markup["resolvedXml"]
+    assert "contentHtml" not in markup
+    xslt = """<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
+        <xsl:template match="/"><div><xsl:value-of select="entry/sub/headword"/></div></xsl:template>
+        </xsl:stylesheet>"""
+    markup = ops.get_entry_rendering(dictDB, xml, ops.get_xslt_transformer(xslt))
+    assert markup == {"contentHtml": "<div>subentry headword edited</div>"}
+    print("PASS Entry rendering resolves subentries for both XML and XSLT responses")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
 dictDB.close()
 test_directory.cleanup()
 sys.exit(bool(failures))

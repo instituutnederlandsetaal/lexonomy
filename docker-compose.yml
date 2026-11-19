@@ -6,8 +6,6 @@ services:
             args:
                 VER: ${VER:-dev}
         volumes:
-            - ./website/siteconfig.json.template:/opt/service/website/siteconfig.json:ro
-            - ./website/config.js.template:/opt/service/website/config.js:ro
             - lexonomy_data:/opt/service/data
         ports:
             - "8000:8000"

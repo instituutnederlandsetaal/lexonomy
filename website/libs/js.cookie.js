@@ -6,23 +6,12 @@
  * Released under the MIT license
  */
 ;(function (factory) {
-	var registeredInModuleLoader = false;
-	if (typeof define === 'function' && define.amd) {
-		define(factory);
-		registeredInModuleLoader = true;
-	}
-	if (typeof exports === 'object') {
-		module.exports = factory();
-		registeredInModuleLoader = true;
-	}
-	if (!registeredInModuleLoader) {
-		var OldCookies = window.Cookies;
-		var api = window.Cookies = factory();
-		api.noConflict = function () {
-			window.Cookies = OldCookies;
-			return api;
-		};
-	}
+	var OldCookies = window.Cookies;
+	var api = window.Cookies = factory();
+	api.noConflict = function () {
+		window.Cookies = OldCookies;
+		return api;
+	};
 }(function () {
 	function extend () {
 		var i = 0;
@@ -163,3 +152,5 @@
 
 	return init(function () {});
 }));
+
+export default window.Cookies.noConflict()

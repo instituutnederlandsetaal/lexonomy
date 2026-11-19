@@ -1,11 +1,25 @@
-window.Xemplatron={};
+import linkIcon from '../furniture/link.png'
+import { router } from '../js/router.ts'
+import { parseXml } from '../js/xml.js'
+
+export const Xemplatron = {};
 Xemplatron.xema=null;
 Xemplatron.xemplate=null;
+
+export function entryHtml(entry, { xemplate, xema }) {
+  const html = entry.contentHtml
+  // Older backends embed the resolved XML in a script. Read the XML without running it.
+  const legacy = html?.match(/^\s*<script type='text\/javascript'>\s*\$\('#viewer'\)\.html\(Xemplatron\.xml2html\(\s*'([\s\S]*)',\n\s*\{/)
+  if (html && !legacy) return html
+  const xml = entry.resolvedXml ?? legacy?.[1].replaceAll("\\'", "'") ?? entry.content
+  return xml ? Xemplatron.xml2html(xml, xemplate, xema) : ''
+}
 
 Xemplatron.xml2html=function(xml, xemplate, xema){
   Xemplatron.xema=xema;
   Xemplatron.xemplate=xemplate;
-  if(typeof(xml)=="string") xml=$.parseXML(xml);
+  if(typeof xml === "string") xml = parseXml(xml);
+  if (!xml) return '';
   var html=Xemplatron.el2html(xml.documentElement, true, true);
   return html;
 };
@@ -14,26 +28,27 @@ Xemplatron.el2html=function(el, isFirst, isLast){
   var html="";
   var caption="";
   if (el.hasAttribute('lxnm:linkable')) {
-     html+="<span style='display:none' name='"+el.getAttribute('lxnm:linkable')+"' class='linkable'><img src='/furniture/link.png'/>"+el.getAttribute('lxnm:linkable')+"</span>";
+     const label = Xemplatron.xmlEscape(el.getAttribute('lxnm:linkable'));
+     html+="<span style='display:none' name='"+label+"' class='linkable'><img src='"+linkIcon+"'/>"+label+"</span>";
   }
   var xema=Xemplatron.xema.elements[el.nodeName]; if(xema && xema.filling=="lst") {
-    html+=el.textContent;
+    html+=Xemplatron.xmlEscape(el.textContent);
     if(xema.values) for(var i=0; i<xema.values.length; i++) if(xema.values[i].value==el.textContent) {caption=xema.values[i].caption; break;}
   } else if (xema && xema.filling=="med") {
     var fileType = Xemplatron.detectFileType(el.textContent);
-    console.log(fileType)
+    var url = Xemplatron.xmlEscape(el.textContent);
     switch(fileType) {
       case 'image':
-        html = '<img src="'+el.textContent+'" class="media_image"/>';
+        html = '<img src="'+url+'" class="media_image"/>';
         break;
       case 'video':
-        html = '<video controls class="media_video"><source src="'+el.textContent+'"/></video>';
+        html = '<video controls class="media_video"><source src="'+url+'"/></video>';
         break;
       case 'audio':
-        html = '<audio controls class="media_audio" src="'+el.textContent+'"/>';
+        html = '<audio controls class="media_audio" src="'+url+'"/>';
         break;
       default:
-        html = el.textContent;
+        html = url;
         break;
     }
   } else {
@@ -82,7 +97,7 @@ Xemplatron.at2html=function(at, isFirst, isLast){
   var xemplate=Xemplatron.getXemplate(at);
   var html="";
   var caption="";
-  var xema=Xemplatron.xema.elements[at.ownerElement.nodeName]; if(xema) xema=xema.attributes[at.nodeName]; else xema=null;
+  var xema = Xemplatron.xema.elements[at.ownerElement.nodeName]?.attributes?.[at.nodeName];
   if(xema && xema.filling=="lst") {
     html=Xemplatron.xmlEscape(at.nodeValue);
     if(xema.values) for(var i=0; i<xema.values.length; i++) if(xema.values[i].value==at.nodeValue) {caption=xema.values[i].caption; break;}
@@ -119,8 +134,7 @@ Xemplatron.getXemplate=function(elat){
     if(Xemplatron.xemplate[parentName] && Xemplatron.xemplate[parentName].attributes && Xemplatron.xemplate[parentName].attributes[elat.nodeName]) xemplate=Xemplatron.xemplate[parentName].attributes[elat.nodeName];
     else xemplate={order: "after", shown: false, layout: "inline"};
   }
-  if(xemplate && xemplate.shown=="false") xemplate.shown=false;
-  return xemplate;
+  return xemplate?.shown === "false" ? { ...xemplate, shown: false } : xemplate;
 };
 
 Xemplatron.getStyle=function(dimension, name){
@@ -135,8 +149,18 @@ Xemplatron.styles={ //the dimensions are ordered from innermost to outermost
   },
   interactivity: {
     "title": "Interactivity",
-    "xref": {toHtml: function(ly, html, n, isF, isL){return "<a class='xref' href=\"" + window.location.hash.split("?")[0] + "?s=" + encodeURIComponent(n.textContent) + "&m=substring\">"+html+"</a>"}, title: "Clickable cross-reference"},
-    "xlink": {toHtml: function(ly, html, n, isF, isL){return "<a class='xlink' target='_blank' href='"+n.textContent.replace("'", "&apos;")+"'>"+n.textContent+"</a>"}, title: "External URL link"},
+    "xref": {toHtml: function(ly, html, n){
+      const { name, params } = router.currentRoute.value
+      const href = router.resolve({ name, params, query: { s: n.textContent, m: 'substring' } }).href
+      return '<a class="xref" data-text="' + Xemplatron.xmlEscape(n.textContent) + '" href="' + Xemplatron.xmlEscape(href) + '">' + html + '</a>'
+    }, title: "Clickable cross-reference"},
+    "xlink": {toHtml: function(ly, html, n) {
+      const text = Xemplatron.xmlEscape(n.textContent);
+      if (!n.textContent || !URL.canParse(n.textContent, document.baseURI)) return text;
+      const url = new URL(n.textContent, document.baseURI);
+      if (!['https:', 'http:', 'mailto:', 'tel:', 'ftp:'].includes(url.protocol)) return text;
+      return '<a class="xlink" target="_blank" rel="noopener" href="' + Xemplatron.xmlEscape(url.href) + '">' + text + '</a>';
+    }, title: "External URL link"},
   },
   innerPunc: {
     "title": "Inner punctuation",

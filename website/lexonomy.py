@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 
 import os
+from contextlib import closing
+from pathlib import Path
+from urllib.parse import urlsplit
 from sqlite3 import Connection
 import sys
 import functools
@@ -11,10 +14,11 @@ import json
 import datetime
 from ops import siteconfig
 import bottle
-from bottle import (HTTPResponse, hook, route, get, post, run, error, request,
+from bottle import (HTTPResponse, hook, get, post, run, error, request,
                     response, static_file, abort, redirect, install)
 
 from ops import Configs, User
+from adminscripts.setup_admin import create_initial_admin, pending_code_digest
 
 if TYPE_CHECKING:
     request: Any
@@ -52,15 +56,41 @@ if not cgi and len(sys.argv) > 1:
         sys.exit(1)
     my_url = sys.argv[1]
 
-# serve static files
-@route('/<path:re:(widgets|furniture|libs|index.*\\.html|config\\.js|img|js\\/|css|docs|dist|version\\.txt).*>')
-def server_static(path: str):
-    return static_file(path, root="./")
+site_root = Path(__file__).resolve().parent
+frontend_dist = site_root / "dist"
+root_path = siteconfig["rootPath"]
+public_path = urlsplit(siteconfig["baseUrl"]).path or "/"
+
+
+@get(root_path + "assets/<filename>")
+def frontend_asset(filename):
+    asset = static_file(filename, root=frontend_dist / "assets",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    return HTTPResponse(status=404) if asset.status_code == 404 else asset
+
+
+@get(root_path + "furniture/<filename:re:lic-[a-z-]+\\.png>")
+def licence_icon(filename):
+    return static_file(filename, root=site_root / "furniture")
+
+
+@get(root_path + "version.txt")
+def frontend_version():
+    return static_file("version.txt", root=site_root,
+                       headers={"Cache-Control": "no-cache"})
+
+
+if root_path != "/":
+    @get(root_path.rstrip("/"))
+    def home_with_slash():
+        return redirect(public_path)
+
 
 # ignore trailing slashes, urldecode cookies
 @hook('before_request')
 def strip_path():
-    request.environ['PATH_INFO'] = request.environ['PATH_INFO'].rstrip('/')
+    if request.path != root_path:
+        request.environ["PATH_INFO"] = request.environ["PATH_INFO"].rstrip("/")
     from urllib.parse import unquote
     for c in request.cookies:
         request.cookies[c] = unquote(request.cookies[c])
@@ -120,7 +150,7 @@ def authDict(checkRights: list[str], errorRedirect: bool=False):
                 for r in checkRights:
                     if not res.get(r, False):
                         if errorRedirect:
-                            redirect("/"+kwargs["dictID"])
+                            redirect(public_path + kwargs["dictID"])
                         else:
                             return res
                 kwargs["user"] = res
@@ -157,7 +187,7 @@ def auth(func: Any):
     def wrapper_verifyLogin(*args, **kwargs):
         res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
         if not res["loggedin"]:
-            redirect("/")
+            redirect(public_path)
         kwargs["user"] = res
         return func(*args, **kwargs)
     return wrapper_verifyLogin
@@ -170,25 +200,37 @@ def authAdmin(func: Any):
     def wrapper_verifyLoginAdmin(*args, **kwargs):
         res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
         if not res["loggedin"] or not res["isAdmin"]:
-            redirect("/")
+            redirect(public_path)
         kwargs["user"] = res
         return func(*args, **kwargs)
     return wrapper_verifyLoginAdmin
 
 #homepage
-@get(siteconfig["rootPath"])
+@get(root_path)
 def home():
-    return static_file("/index.html", root="./")
+    if not (frontend_dist / "index.html").is_file():
+        return HTTPResponse("Build the frontend with npm run build, or open the Vite dev server.", status=503)
+    return static_file("index.html", root=frontend_dist,
+                       headers={"Cache-Control": "no-cache"})
 
 @get(siteconfig["rootPath"] + "siteconfigread.json")
 def lexonomyconfig():
+    with closing(ops.getMainDB()) as conn:
+        setup_required = pending_code_digest(conn, siteconfig) is not None
     configData = {
         "licences": siteconfig['licences'],
-        "baseUrl": siteconfig['baseUrl']
+        "baseUrl": siteconfig['baseUrl'],
+        "setupRequired": setup_required,
     }
     if "consent" in siteconfig and siteconfig["consent"].get("terms") != "":
         configData["consent"] = siteconfig["consent"]
     return configData
+
+@post(root_path + "initial-admin.json")
+def initialize_admin():
+    with closing(ops.getMainDB()) as conn:
+        success = create_initial_admin(conn, siteconfig, request.forms.code, request.forms.password)
+    return {"success": success}
 
 @get(siteconfig["rootPath"] + "userdicts.json")
 @auth
@@ -212,30 +254,27 @@ def entrydelete(dictID: str, user: User, dictDB: Connection, configs: Configs):
 @authDict([])
 def entryread(dictID: str, user: User, dictDB: Connection, configs: Configs):
     entryID = int(request.forms.id)
-    entries = ops.readEntries(dictDB, configs, entryID, html = True, titlePlain = True)
-    entry = entries[0] if len(entries) else None
-    if entry:
-        # interop between database and old frontend code
-        entry["success"] = True
-        entry["contentHtml"] = entry["html"]
-        entry["content"] = entry["xml"]
+    entries = ops.readEntries(dictDB, configs, entryID, titlePlain=True)
+    if not entries:
+        return {"success": False, "id": entryID}
+    entry = entries[0]
+    render = ops.get_xslt_transformer(configs["xemplate"].get("_xsl", ""))
+    return {**entry, "success": True, **ops.get_entry_rendering(dictDB, entry["xml"], render)}
 
-    return entry if entry else {"success": False, "id": entryID, "content": "", "contentHtml": ""}
+def entry_save_result(dictDB, configs, id, xml, success, feedback):
+    result = {"success": success, "id": id, "feedback": feedback}
+    if success:
+        content = str(xml)
+        render = ops.get_xslt_transformer(configs["xemplate"].get("_xsl", ""))
+        result.update(content=content, **ops.get_entry_rendering(dictDB, content, render))
+    return result
 
 @post(siteconfig["rootPath"]+"<dictID>/entryupdate.json")
 @authDict(["canEdit"])
 def entryupdate(dictID: str, user: User, dictDB: Connection, configs: Configs):
     entryID = int(request.forms.id ) if request.forms.id else None
-    id, xml, success, feedback = ops.createEntry(dictDB, configs, xml = request.forms.content, email=user["email"], id=entryID)
-    result = {"success": success, "id": id, "content": "", "contentHtml": "", "feedback": feedback}
-    if success:
-        entry = ops.readEntries(dictDB, configs, id, html = True, titlePlain = True)[0]
-        # interop between database and old frontend code
-        result["success"] = True
-        result["content"] = entry["xml"]
-        result["contentHtml"] = entry["html"]
-
-    return result
+    saved = ops.createEntry(dictDB, configs, xml=request.forms.content, email=user["email"], id=entryID)
+    return entry_save_result(dictDB, configs, *saved)
 
 @post(siteconfig["rootPath"]+"<dictID>/entrycreate.json")
 @authDict(["canEdit"])
@@ -250,16 +289,8 @@ def entrycreate(dictID: str, user: User, dictDB: Connection, configs: Configs):
     except:
         return { "success": False, "feedback": "Invalid XML"}
 
-    id, xml, success, feedback = ops.createEntry(dictDB, configs, xml , email=user["email"])
-
-    result = {"success": success, "id": id, "content": "", "contentHtml": "", "feedback": feedback}
-    if success:
-        entry = ops.readEntries(dictDB, configs, id, html = True, titlePlain = True)[0]
-        result["success"] = True
-        result["content"] = entry["xml"]
-        result["contentHtml"] = entry["html"]
-
-    return result
+    saved = ops.createEntry(dictDB, configs, xml, email=user["email"])
+    return entry_save_result(dictDB, configs, *saved)
 
 @post(siteconfig["rootPath"]+"<dictID>/entryflag.json")
 @authDict(["canEdit"])
@@ -288,9 +319,9 @@ def subget(dictID: str, user: User, dictDB: Connection, configs: Configs):
         entries = list(filter(checkAttributes, entries))
 
     for entry in entries:
-        # no longer needed, remove from returned data.
-        del entry["tag"]
-        del entry["xml"]
+        entry.pop("tag", None)
+        entry.pop("xml", None)
+        entry.pop("content", None)
 
     return {
         "success": True,
@@ -493,19 +524,19 @@ def publicentrynabes(dictID: str, entryID: int, user: User, dictDB: Connection, 
 @authDict([], True)
 def publicentryxml(dictID: str, entryID: int, user: User, dictDB: Connection, configs: Configs):
     if not configs["publico"]["public"]:
-        return redirect("/"+dictID)
+        return redirect(public_path + dictID)
     if not "licence" in configs["publico"] or not siteconfig["licences"][configs["publico"]["licence"]]["canDownloadXml"]:
-        return redirect("/"+dictID)
+        return redirect(public_path + dictID)
     res = ops.exportEntryXml(dictDB, dictID, entryID, configs, siteconfig["baseUrl"])
     if res["entryID"] == 0:
-        return redirect("/"+dictID)
+        return redirect(public_path + dictID)
     response.content_type = "text/xml; charset=utf-8"
     return res["xml"]
 
 @post(siteconfig["rootPath"]+"<dictID>/random.json")
 def publicrandom(dictID: str):
     if not ops.dictExists(dictID):
-        return redirect("/")
+        return redirect(public_path)
     with ops.getDB(dictID) as dictDB:
         configs = ops.readDictConfigs(dictDB)
         if not configs["publico"]["public"]:
@@ -727,38 +758,38 @@ def changefavdict(user):
 @get(siteconfig["rootPath"]+"<dictID>")
 def publicdict(dictID):
     if ops.dictExists(dictID):
-        return redirect("/#" + dictID)
+        return redirect(public_path + "#" + dictID)
     else:
-        return redirect("/")
+        return redirect(public_path)
 
 @get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>")
 def publicentry(dictID, entryID):
     if ops.dictExists(dictID):
-        return redirect("/#" + dictID + '/' + entryID)
+        return redirect(public_path + "#" + dictID + '/' + entryID)
     else:
-        return redirect("/")
+        return redirect(public_path)
 
 @get(siteconfig["rootPath"]+"<dictID>/edit")
 def dictedit(dictID):
     if ops.dictExists(dictID):
-        return redirect("/#" + dictID + '/edit')
+        return redirect(public_path + "#" + dictID + '/edit')
     else:
-        return redirect("/")
+        return redirect(public_path)
 
 @get(siteconfig["rootPath"]+"<dictID>/edit/<doctype>")
 def dicteditdoc(dictID, doctype):
     if ops.dictExists(dictID):
-        return redirect("/#" + dictID + '/edit/' + doctype)
+        return redirect(public_path + "#" + dictID + '/edit/' + doctype)
     else:
-        return redirect("/")
+        return redirect(public_path)
 
 @get(siteconfig["rootPath"]+"docs/intro")
 def docintro():
-    return redirect("/#docs/intro")
+    return redirect(public_path + "#docs/intro")
 
 @error(404)
 def error404(_error):
-    return HTTPResponse(status=303, headers={"Location": "/#/e404"})
+    return HTTPResponse(status=303, headers={"Location": public_path + "#/e404"})
 
 # deployment
 debug="DEBUG" in os.environ
@@ -772,6 +803,8 @@ else:
     port = 3000
 if cgi: # we are called as CGI script
     run(host=host, port=port, debug=debug, server="cgi")
+elif debug:
+    run(host=host, port=port, debug=True, reloader=True, interval=0.25)
 else: # run a standalone server, prefer the paste server if available over the builtin one
     try:
         import paste

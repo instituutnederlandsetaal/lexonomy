@@ -1,7 +1,6 @@
-// @ts-check
+import { Xemplatron } from './xemplatron.js'
 
-// @ts-ignore
-window.Xematron={};
+export const Xematron = {};
 
 //takes a xema, returns a Xonomy docSpec:
 /**
@@ -396,7 +395,7 @@ Xematron.initialAttributes=function(xema, elementID){
 		var att=xema.elements[elementID].attributes[attname];
 		if(att.optionality=="obligatory") {
 			var attvalue="";
-			ret+=" "+attname+"='"+Xonomy.xmlEscape(attvalue)+"'";
+			ret+=" "+attname+"='"+Xemplatron.xmlEscape(attvalue)+"'";
 		}
 		}
 	}

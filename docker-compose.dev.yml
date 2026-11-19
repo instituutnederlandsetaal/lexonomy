@@ -1,0 +1,29 @@
+services:
+    backend:
+        build:
+            context: .
+            target: backend
+        environment:
+            DEBUG: "1"
+            PYTHONDONTWRITEBYTECODE: "1"
+            LEXONOMY_SITECONFIG: ${LEXONOMY_DEV_SITECONFIG:-siteconfig.json.template}
+        volumes:
+            - ./website:/opt/service/website:ro
+            - lexonomy_dev_data:/opt/service/data
+    frontend:
+        image: node:22-alpine
+        working_dir: /opt/service/website
+        command: sh -c "npm ci && exec npm start -- --host 0.0.0.0"
+        environment:
+            LEXONOMY_BACKEND_URL: ${LEXONOMY_BACKEND_URL:-http://backend:8000}
+            CHOKIDAR_USEPOLLING: "true"
+        volumes:
+            - ./website:/opt/service/website:ro
+            - lexonomy_dev_node_modules:/opt/service/website/node_modules
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        ports:
+            - "127.0.0.1:${FRONTEND_PORT:-5173}:5173"
+volumes:
+    lexonomy_dev_data:
+    lexonomy_dev_node_modules:

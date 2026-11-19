@@ -23,6 +23,7 @@ import re
 import secrets
 import pathlib
 from icu import Locale, Collator
+from adminscripts.setup_admin import INITIAL_ADMIN
 
 class ConfigTitling(TypedDict):
     headword: NotRequired[str]
@@ -255,14 +256,16 @@ class Historiography(TypedDict):
     "Path of the newly uploaded file (after saving as tempfile on the server) when uploading a dictionary and purging the old data."
     viaApi: NotRequired[bool]
 
-class HistoryEntry(TypedDict):
+class EntryRendering(TypedDict, total=False):
+    contentHtml: str
+    resolvedXml: str
+
+class HistoryEntry(EntryRendering):
     entry_id: int
     revision_id: int
     content: str
     "xml content"
-    contentHtml: str
-    "html content"
-    action: Literal["create", "update"]
+    action: Literal["create", "update", "delete", "purge"]
     when: int
     "UTC time? DATETIME in sqlite"
     email: str
@@ -287,8 +290,8 @@ class EntryFromDatabase(TypedDict):
     parententries: List[RelatedEntry]
     # Optionals
     xml: NotRequired[str]
+    content: NotRequired[str]
     tag: NotRequired[Tag]
-    html: NotRequired[str]
     titlePlain: NotRequired[str]
 
 class User(TypedDict):
@@ -643,7 +646,7 @@ def searchEntries(
         results = results[offset:]
     return total, results
 
-def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int], List[SortableEntry]], xml: bool=True, tag: bool=False, html: bool=False, titlePlain: bool = False, sortdesc: Union[str, bool] = False) -> List[EntryFromDatabase]:
+def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int], List[SortableEntry]], xml: bool=True, tag: bool=False, titlePlain: bool = False, sortdesc: Union[str, bool] = False) -> List[EntryFromDatabase]:
     """Read entries from the database, optionally returning some computed values with them.
     Entries requiring an update (due to changed config or related entries) are updated prior to returning.
     Entries are returned sorted according to their sortKey
@@ -654,7 +657,6 @@ def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int],
         ids (Tuple[int, List[int]]): either a single id or list of ids to retrieve. Maxes out at something like 500k, due to statement length limitations.
         xml (bool, optional): Also return the xml as string. Defaults to True.
         tag (bool, optional): Also return the xml as parsed. Defaults to False.
-        html (bool, optional): Also return the html. This runs the xslt from the config, or otherwise generates a <script> tag that will transform the xml to html on the client side. Defaults to False.
         titlePlain (bool, optional): Also include the plain text of the entry. This requires the xml to be parsed, so is slow.
         sortdesc (Union[bool, str], optional): Reverse the usual sort order? The usual sort order is determined by ConfigTitling["sortDesc"]
     Returns:
@@ -719,9 +721,6 @@ def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int],
         where entries.id in ({",".join("?" * len(ids))})
     """, ids).fetchall()
 
-    # If required, load transformer outside of loop
-    run_xslt = get_xslt_transformer(configs.get("xemplate", {}).get("_xsl", "")) if html else None
-
     entries: List[EntryFromDatabase] = []
     for row in rows:
         ret: EntryFromDatabase = {
@@ -736,34 +735,21 @@ def readEntries(dictDB: Connection, configs: Configs, ids: Union[int, List[int],
         }
         if xml:
             ret["xml"] = row["xml"]
-            ret["content"] = row["xml"] # type: ignore - compatibility with screenful. TODO remove
+            ret["content"] = row["xml"]
         if tag or titlePlain:
             parsedXml = parse(row["xml"])
             if tag:
                 ret["tag"] = parsedXml
             if titlePlain:
                 ret["titlePlain"] = get_entry_title(parsedXml, configs, xema_element_id=xema_get_id_from_element_name(configs["xema"], row["doctype"]))[0]
-        if html:
-            ret["html"] = get_entry_html(dictDB, configs, row["xml"], run_xslt)
         entries.append(ret)
     sortEntries(configs, entries, sortdesc)  # type: ignore - SortableEntry is a subset of Entry so this always works
     return entries
 
-def get_entry_html(dictDB: Connection, configs: Configs, xml: str, run_xslt: Any) -> str:
-    "Run the xslt on the xml, or - failing that - return a <script> tag that will transform it clientside using the Xemplatron. Result should be used with 'element.innerHTML = ...'"
-    if not run_xslt:
-        run_xslt = get_xslt_transformer(configs.get("xemplate", {}).get("_xsl", ""))
-
+def get_entry_rendering(dictDB: Connection, xml: str, run_xslt: Callable[[str], Optional[str]]) -> EntryRendering:
     xml = str(resolveSubentries(dictDB, xml))
-    safeXml = re.sub(r"[\n\r]", "", re.sub(r"'", "\\'", xml))
-    return run_xslt(xml) or f"""
-        <script type='text/javascript'>
-            $('#viewer').html(Xemplatron.xml2html(
-                '{safeXml}',
-                {json.dumps(configs["xemplate"])},
-                {json.dumps(configs["xema"])}
-            ));
-        </script>"""
+    html = run_xslt(xml)
+    return {"contentHtml": html} if html else {"resolvedXml": xml}
 
 def fixup_namespaces(xml: Tag):
     xml.attrs['xmlns:lxnm'] = 'http://www.lexonomy.eu/'
@@ -1460,7 +1446,7 @@ def logout(user: User):
         return True
 
 def sendSignupToken(email: str, remoteip: str):
-    if siteconfig["readonly"]:
+    if siteconfig["readonly"] or (email.lower() == INITIAL_ADMIN and INITIAL_ADMIN in siteconfig["admins"]):
         return False
 
     with getMainDB() as conn:
@@ -1504,13 +1490,21 @@ def sendToken(email: str, remoteip: str):
     return True
 
 def verifyToken(token: str, tokenType: Literal["recovery", "register"]):
+    if tokenType not in ("recovery", "register"):
+        return False
     with getMainDB() as conn:
-        return bool(conn.execute("select * from "+tokenType+"_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,)))
+        row = conn.execute(
+            f"select 1 from {tokenType}_tokens where token=? and expiration>=datetime('now') and usedDate is null",
+            (token,),
+        ).fetchone()
+        return row is not None
 
 def createAccount(token: str, password: str, remoteip: str):
     with getMainDB() as conn:
         c = conn.execute("select * from register_tokens where token=? and expiration>=datetime('now') and usedDate is null", (token,))
         row = c.fetchone()
+        if row and row["email"].lower() == INITIAL_ADMIN and INITIAL_ADMIN in siteconfig["admins"]:
+            return False
         if row:
             c2 = conn.execute("select * from users where email=?", (row["email"],))
             row2 = c2.fetchone()
@@ -2125,14 +2119,14 @@ def readDictHistory(dictDB: Connection, dictID: str, configs: Configs, entryID: 
     c = dictDB.execute("select * from history where entry_id=? order by [when] desc", (entryID,))
     for row in c.fetchall():
         xml = row["xml"]
-        historiography = json.loads(row["historiography"])
+        historiography = json.loads(row["historiography"] or "{}")
         if historiography.pop("apikey", None):
             historiography["viaApi"] = True
         history.append({
             "entry_id": row["entry_id"],
             "revision_id": row["id"],
-            "content": xml,
-            "contentHtml": get_entry_html(dictDB, configs, xml, html_transformer),
+            "content": xml or "",
+            **(get_entry_rendering(dictDB, xml, html_transformer) if xml else {}),
             "action": row["action"],
             "when": row["when"],
             "email": row["email"] or "",
@@ -2211,6 +2205,7 @@ def links_get(source_dict: str, source_el: str, source_id: str, target_dict: str
         targetConfig = dbconfigs[row["target_dict"]]
         source_entry = ""
         source_hw = ""
+        source_doctype = ""
         source_preview = ""
         try:
             # test if source DB has linkables tables
@@ -2225,9 +2220,13 @@ def links_get(source_dict: str, source_el: str, source_id: str, target_dict: str
         if source_entry == "" and re.match(r"^[0-9]+_[0-9]+$", row["source_id"]):
             source_entry = row["source_id"].split("_")[0]
         if source_entry != "":
-            source_hw = readEntries(sourceDB, sourceConfig, int(source_entry), titlePlain=True)[0].get("titlePlain", "")
+            record = readEntries(sourceDB, sourceConfig, int(source_entry), titlePlain=True)
+            if record:
+                source_hw = record[0].get("titlePlain", "")
+                source_doctype = record[0]["doctype"]
         target_entry = ""
         target_hw = ""
+        target_doctype = ""
         target_preview = ""
         try:
             # test if target DB has linkables tables
@@ -2242,7 +2241,10 @@ def links_get(source_dict: str, source_el: str, source_id: str, target_dict: str
         if target_entry == "" and re.match(r"^[0-9]+_[0-9]+$", row["target_id"]):
             target_entry = row["target_id"].split("_")[0]
         if target_entry != "":
-            target_hw = readEntries(targetDB, targetConfig, int(target_entry), titlePlain=True)[0].get("titlePlain", "")
+            record = readEntries(targetDB, targetConfig, int(target_entry), titlePlain=True)
+            if record:
+                target_hw = record[0].get("titlePlain", "")
+                target_doctype = record[0]["doctype"]
         if target_dict == "CILI":
             target_entry = row["target_id"]
             target_hw = row["target_id"]
@@ -2251,12 +2253,14 @@ def links_get(source_dict: str, source_el: str, source_id: str, target_dict: str
             "link_id": row["link_id"],
             "source_dict": row["source_dict"],
             "source_entry": str(source_entry),
+            "source_doctype": source_doctype,
             "source_hw": source_hw,
             "source_el": row["source_element"],
             "source_id": row["source_id"],
             "source_preview": source_preview,
             "target_dict": row["target_dict"],
             "target_entry": str(target_entry),
+            "target_doctype": target_doctype,
             "target_hw": target_hw,
             "target_el": row["target_element"],
             "target_id": row["target_id"],

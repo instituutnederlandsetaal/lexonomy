@@ -1,4 +1,4 @@
-CREATE TABLE links (
+CREATE TABLE IF NOT EXISTS links (
     link_id INTEGER PRIMARY KEY, 
     source_dict TEXT, 
     source_element TEXT, 

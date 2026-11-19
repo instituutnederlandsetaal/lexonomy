@@ -1,55 +1,43 @@
 #!/usr/bin/env python3
 
-# Script to initialize database and users, from the siteconfig.json file
-
-import json
-import os.path
-import sqlite3
+from contextlib import closing
 import hashlib
-import random
-import string
+import json
+import os
+from pathlib import Path
+import secrets
+import sqlite3
 
-siteconfig = json.load(open(os.environ.get("LEXONOMY_SITECONFIG",
-                                           "siteconfig.json"), encoding="utf-8"))
-path = os.path.join(siteconfig["dataDir"], 'lexonomy.sqlite')
-pathXref = os.path.join(siteconfig["dataDir"], 'crossref.sqlite')
+from setup_admin import INITIAL_ADMIN, prepare_admin_setup
 
-conn = sqlite3.connect(path)
-print("Connected to database: %s" % path)
+website = Path(__file__).resolve().parents[1]
+config = json.loads(Path(os.environ.get("LEXONOMY_SITECONFIG", website / "siteconfig.json")).read_text(encoding="utf-8"))
+data_dir = website / config["dataDir"]
+data_dir.mkdir(parents=True, exist_ok=True)
 
-if siteconfig.get("dbSchemaFile") != "":
-    schema = open(siteconfig.get("dbSchemaFile"), 'r').read()
-    try:
-        conn.executescript(schema)
-        conn.commit()
-        print("Initialized %s with: %s" % (path, siteconfig.get("dbSchemaFile")))
-    except sqlite3.Error as e:
-        print("Problem importing database schema. Likely the DB has already been created. Database error: %s" % e)
-else:
-    print("Unknown database schema, please add dbSchemaFile to siteconfig.json")
+for filename, setting, required in (
+    ("lexonomy.sqlite", "dbSchemaFile", {"dicts", "users", "user_dict"}),
+    ("crossref.sqlite", "dbXrefSchemaFile", {"links"}),
+):
+    with closing(sqlite3.connect(data_dir / filename)) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if not required <= tables:
+            schema = (website / config[setting]).read_text(encoding="utf-8")
+            conn.executescript("BEGIN IMMEDIATE;\n" + schema + "\nCOMMIT;")
+            for table in required:
+                conn.execute(f"SELECT 1 FROM {table} LIMIT 0")
 
-connXref = sqlite3.connect(pathXref)
-print("Connected to database: %s" % pathXref)
+with closing(sqlite3.connect(data_dir / "lexonomy.sqlite")) as conn:
+    with conn:
+        for email in config["admins"]:
+            if email == INITIAL_ADMIN:
+                continue
+            password = secrets.token_urlsafe(18)
+            result = conn.execute("INSERT INTO users (email, passwordHash) VALUES (?, ?) ON CONFLICT(email) DO NOTHING",
+                                  (email, hashlib.sha1(password.encode()).hexdigest()))
+            if result.rowcount:
+                print(f"Created administrator {email}. Initial password: {password}")
 
-if siteconfig.get("dbXrefSchemaFile") != "":
-    schema = open(siteconfig.get("dbXrefSchemaFile"), 'r').read()
-    try:
-        connXref.executescript(schema)
-        connXref.commit()
-        print("Initialized %s with: %s" % (pathXref, siteconfig.get("dbXrefSchemaFile")))
-    except sqlite3.Error as e:
-        print("Problem importing database schema. Likely the DB has already been created. Database error: %s" % e)
-else:
-    print("Unknown database schema, please add dbXrefSchemaFile to siteconfig.json")
-
-for user in siteconfig["admins"]:
-    password = ''.join(random.choice(string.ascii_lowercase + string.digits) for _ in range(8))
-    passhash = hashlib.sha1(password.encode("utf-8")).hexdigest();
-    try:
-        conn.execute("insert into users(email, passwordHash) values(?, ?)", (user, passhash))
-        conn.commit()
-        print("I have created a user account for %s. The password is: %s" % (user, password))
-    except sqlite3.Error as e:
-        print("Creating a user account for %s has failed. This could be because the account already exists." % user)
-
-conn.close() 
+    code = prepare_admin_setup(conn, config)
+    if code:
+        print(f"Lexonomy setup code for {INITIAL_ADMIN}: {code}", flush=True)

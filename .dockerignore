@@ -16,5 +16,4 @@
 !website/dictTemplates/*.sqlite
 website/dist
 website/siteconfig.json
-website/config.js
 website/version.txt

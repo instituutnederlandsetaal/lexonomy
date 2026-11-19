@@ -9,8 +9,10 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from adminscripts.setup_admin import INITIAL_ADMIN, create_initial_admin, pending_code_digest, prepare_admin_setup
+from siteconfig import find_siteconfig
 
 
 class InitialAdminTests(unittest.TestCase):
@@ -86,6 +88,36 @@ class PasswordResetTests(unittest.TestCase):
                                         capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("No Lexonomy account found", result.stderr)
+
+
+class SiteConfigTests(unittest.TestCase):
+    def test_config_precedence_with_source_and_container_defaults(self):
+        with TemporaryDirectory() as directory, patch.dict(os.environ, clear=True):
+            root = Path(directory)
+            api_dir = root / "api"
+            api_dir.mkdir()
+            config_dir = root / "config"
+            config_dir.mkdir()
+            with patch("siteconfig.API_DIR", api_dir):
+                self.assertEqual(find_siteconfig(), config_dir / "siteconfig.example.json")
+
+                bundled = root / "siteconfig.example.json"
+                bundled.touch()
+                self.assertEqual(find_siteconfig(), bundled)
+
+                legacy = api_dir / "siteconfig.json"
+                legacy.touch()
+                self.assertEqual(find_siteconfig(), legacy)
+
+                os.environ["LEXONOMY_SITECONFIG_FALLBACK"] = str(bundled)
+                self.assertEqual(find_siteconfig(), bundled)
+
+                mounted = config_dir / "siteconfig.json"
+                mounted.touch()
+                self.assertEqual(find_siteconfig(), mounted)
+
+                os.environ["LEXONOMY_SITECONFIG"] = "missing.json"
+                self.assertEqual(find_siteconfig(), api_dir / "missing.json")
 
 
 if __name__ == "__main__":

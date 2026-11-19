@@ -66,7 +66,6 @@ cd api
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-cp siteconfig.json.template siteconfig.json
 
 cd ../frontend
 npm ci
@@ -77,29 +76,25 @@ Vite writes the production site to `frontend/dist/`. It hashes bundled files and
 
 ## Configuration
 
-The server and admin scripts load `api/siteconfig.json` by default. Set `LEXONOMY_SITECONFIG` to an absolute path or a path relative to `api/` to select another file. The startup logs report the file in use.
+Configuration uses `config/siteconfig.json` when present.
+When missing, Lexonomy uses the example configuration file `config/siteconfig.example.json`.
+Before editing the configuration, make a copy of the example file as `config/siteconfig.json` you shouldn't edit the template.
 
-The production image ships with the template as its default. To customize it, copy `api/siteconfig.json.template` to `api/siteconfig.json` on the host and add this to `docker-compose.override.yml` in the repository root.
-
-```yaml
-services:
-    lexonomy:
-        volumes:
-            - type: bind
-              source: ./api/siteconfig.json
-              target: /opt/service/api/siteconfig.json
-              read_only: true
-              bind:
-                  create_host_path: false
+```sh
+cp config/siteconfig.example.json config/siteconfig.json
 ```
 
-Run `docker compose up -d --force-recreate lexonomy` after changing the file. If you mount the file elsewhere, set `LEXONOMY_SITECONFIG` in the service's `environment` to its container path.
+After editing the file, restart the running service to apply it.
 
-In Docker development, the backend loads the template by default. Set `LEXONOMY_DEV_SITECONFIG=siteconfig.json` when starting the dev stack to use your copy.
+```sh
+docker compose restart lexonomy
+# Development stack
+docker compose -f docker-compose.dev.yml restart backend
+```
 
-Server operators manage site-wide settings in the configuration file. The browser reads the base URL, licences, consent notices, and first-run setup status. The startup logs show the path inside the container so you can identify the file or bind mount in use.
-
-If you are upgrading a source checkout, move your existing `website/siteconfig.json` to `api/siteconfig.json` before starting the server. If your Compose override mounts the file at `/opt/service/website/siteconfig.json`, update the mount target to `/opt/service/api/siteconfig.json`. Keep the existing database volume at `/opt/service/data`.
+To change the config name or location, use environment variable `LEXONOMY_SITECONFIG`.
+The production docker stack forwards this env var directly, the development stack instead forwards `LEXONOMY_DEV_SITECONFIG` as `LEXONOMY_SITECONFIG` inside the container.
+When running on the host, you should therefor use `LEXONOMY_SITECONFIG` to point to your configuration file (if you don't want to use the `config/` directory).
 
 ### Base URL
 
@@ -169,7 +164,7 @@ The current login page ignores this legacy setting.
 
 ```js
 "admins": ["root@localhost"]
-```  
+```
 
 Accounts listed here can administer the installation. Browser setup creates `root@localhost` when that address is configured and the database has no administrator. For other configured admin addresses, the initializer creates missing accounts and prints their initial passwords.
 

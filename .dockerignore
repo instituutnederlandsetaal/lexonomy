@@ -1,6 +1,9 @@
 *
 !api/
 !api/**
+!config/
+config/*
+!config/siteconfig.example.json
 !frontend/
 !frontend/**
 

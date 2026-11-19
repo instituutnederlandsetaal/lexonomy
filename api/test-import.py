@@ -77,7 +77,7 @@ class Test(TypedDict):
 
 test_directory = TemporaryDirectory(prefix="lexonomy-import-")
 test_config_path = Path(test_directory.name) / "siteconfig.json"
-test_config = json.loads(Path("siteconfig.json.template").read_text(encoding="utf-8"))
+test_config = json.loads(Path("../config/siteconfig.example.json").read_text(encoding="utf-8"))
 test_config.update(dataDir=test_directory.name, admins=[])
 test_config_path.write_text(json.dumps(test_config), encoding="utf-8")
 os.environ["LEXONOMY_SITECONFIG"] = str(test_config_path)

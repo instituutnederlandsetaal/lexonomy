@@ -5,9 +5,12 @@ services:
             target: backend
         environment:
             DEBUG: "1"
-            LEXONOMY_SITECONFIG: ${LEXONOMY_DEV_SITECONFIG:-siteconfig.json.template}
+            LEXONOMY_SITECONFIG: ${LEXONOMY_DEV_SITECONFIG:-}
+            # A source installation in api/ may have its own config.
+            LEXONOMY_SITECONFIG_FALLBACK: /opt/service/siteconfig.example.json
         volumes:
             - ./api:/opt/service/api:ro
+            - ./config:/opt/service/config:ro
             - lexonomy_dev_data:/opt/service/data
     frontend:
         image: node:22-alpine

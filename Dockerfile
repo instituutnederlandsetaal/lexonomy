@@ -19,7 +19,7 @@ RUN --mount=type=bind,source=api/requirements.txt,target=requirements.txt \
     && apk del .build-deps
 
 COPY api/lexonomy.py api/ops.py api/migrate.py api/siteconfig.py api/*.schema ./
-COPY api/siteconfig.json.template ./siteconfig.json
+COPY config/siteconfig.example.json /opt/service/siteconfig.example.json
 COPY api/adminscripts/ ./adminscripts/
 COPY api/dictTemplates/ ./dictTemplates/
 COPY api/resources/ ./resources/

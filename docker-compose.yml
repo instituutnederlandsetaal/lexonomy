@@ -6,6 +6,7 @@ services:
             args:
                 VER: ${VER:-dev}
         volumes:
+            - ./config:/opt/service/config:ro
             - lexonomy_data:/opt/service/data
         ports:
             - "8000:8000"

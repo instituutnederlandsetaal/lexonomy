@@ -27,7 +27,7 @@ watch(dictId, () => { clean.value = false })
          <span>XML without Lexonomy attributes</span>
       </label>
       <small class="helper-text">
-         If you want to import the XML file back to Lexonomy, you need Lexonomy attributes.
+         Keep Lexonomy attributes to re-import the document with its entry IDs and shared subentries. Clean XML expands shared subentries inline.
       </small>
    </section>
 </template>

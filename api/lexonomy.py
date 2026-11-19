@@ -684,17 +684,7 @@ def next_autonumber(dictID: str, user: User, dictDB: Connection, configs: Config
 @post(siteconfig["rootPath"]+"<dictID>/resave.json")
 @authDict(["canEdit","canConfig","canUpload"])
 def resavejson(dictID: str, user: User, dictDB: Connection, configs: Configs):
-    count = 0
-    stats = ops.getDictStats(dictDB)
-    # configure the database for some more speed.
-    dictDB.isolation_level=None
-    dictDB.execute('PRAGMA synchronous = 0')
-    dictDB.execute("PRAGMA cache_size = -100000") # about 100 megs
-    dictDB.execute("begin")
-
-    for entry in dictDB.execute("select id, xml from entries where needs_update=1 limit 127").fetchall():
-        ops.createEntry(dictDB, configs, entry["xml"], "system@lexonomy", entry["id"])
-
+    ops.reindex_entries(dictDB)
     todo = ops.getDictStats(dictDB)["needUpdate"]
     return {
         "todo": todo,

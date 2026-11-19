@@ -127,7 +127,7 @@ def migrate():
         id = dict["id"]
         title = dict["title"]
         try:
-            dictDB = ops.getDB(id)
+            dictDB = ops.getDB(id, prepare=False)
             configs = ops.readDictConfigs(dictDB)
             print(f"Migrating dictionary {title} ({id}) ...")
             for migration in migrations:

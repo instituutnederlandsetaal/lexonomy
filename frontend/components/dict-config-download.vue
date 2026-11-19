@@ -9,7 +9,7 @@
          <textarea id="download_xslt"
                class="materialize-textarea" rows="6" v-model="draft.xslt"></textarea>
          <label for="download_xslt" class="active">XSLT transformation on download</label>
-         <span class="helper-text">You can use this functionality to automatically apply an XSLT transformation when the dictionary is downloaded. If you do not input valid XSLT here, no transformation will be applied.</span>
+         <span class="helper-text">You can use this functionality to apply an XSLT transformation to entries in a clean XML download. Enter valid XSLT to enable the transformation.</span>
       </div>
    </div>
    <p v-if="!loading && !ready">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>

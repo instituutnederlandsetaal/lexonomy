@@ -537,13 +537,17 @@ testables = [{
                 <content>the second sense</content>
                 <pos>verb</pos>
             </sense>
+            <sense>
+                <content>the third sense</content>
+                <pos>adjective</pos>
+            </sense>
         </entry>
     """,
 
     "linkables": {
-        "txt": ["[sense_1] the first sense (noun)", "[sense_2] the second sense (verb)"], # identifiers
-        "element": ["sense", "sense"],
-        "preview": ["the first sense (noun)", "the second sense (verb)"]
+        "txt": ["[sense_1] the first sense (noun)", "[sense_2] the second sense (verb)", "[%(@sense_id)] the third sense (adjective)"], # identifiers
+        "element": ["sense", "sense", "sense"],
+        "preview": ["the first sense (noun)", "the second sense (verb)", "the third sense (adjective)"]
     }
 }, {
     "description": "Test autonumbering can place number in element",
@@ -1082,6 +1086,92 @@ try:
     reread = ops.readEntries(dictDB, configs, detached["id"], titlePlain=True)[0]
     assert reread["schemaId"] == "shared-form" and reread["titlePlain"] == "Replaced source title"
     print("PASS Xema aliases distinguish identical tags by parent and support recursive flag paths")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+
+try:
+    from xml.etree import ElementTree
+
+    assert ops.makeDict("document-roundtrip", "blank", "XML document", "", "root@localhost")
+    source = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary [<!ENTITY label "Shared &amp; stable">]>
+<?publication preserve?>
+<dictionary edition="2" xmlns:m="urn:header" xmlns:lxnm="http://www.lexonomy.eu/">
+  <m:header>Keep this &label;</m:header>
+  <section xml:lang="ar"><entry lxnm:id="33">before <lxnm:subentryParent id="50"/> after</entry>
+    <!--between--><entry lxnm:id="11"><sub lxnm:id="50"><t>&label;</t><m:field><![CDATA[<xml>]]></m:field><?inside keep?></sub></entry>
+  </section>
+  <suffix>Keep this too</suffix>
+</dictionary><!--after the root-->"""
+    with closing(ops.getDB("document-roundtrip")) as db:
+        ops.updateDictConfig(db, "document-roundtrip", "subbing", {"sub": {}})
+
+        def load(data, **kwargs):
+            return ops.import_dictionary(db, data, "test@lexonomy",
+                                         lambda *_: None, **kwargs)
+
+        def output(clean=False):
+            return "".join(ops.export("document-roundtrip", db, ops.readDictConfigs(db), clean=clean))
+
+        assert load(source) == 2
+        archive = output()
+        assert "<!DOCTYPE dictionary" in archive and "<?publication preserve?>" in archive
+        assert "<!--between-->" in archive and archive.endswith("<!--after the root-->")
+        assert "<![CDATA[<xml>]]>" in archive and "<?inside keep?>" in archive
+        root = ElementTree.fromstring(archive)
+        assert root.attrib["edition"] == "2"
+        assert root.find("{urn:header}header").text == "Keep this Shared & stable"
+        assert root.find("suffix").text == "Keep this too"
+        assert len(root.findall(".//sub")) == 1
+        assert len(root.findall(".//{http://www.lexonomy.eu/}subentryParent")) == 1
+        assert [entry.attrib["{http://www.lexonomy.eu/}id"] for entry in root.findall(".//entry")] == ["33", "11"]
+        assert set(tuple(row) for row in db.execute("select parent_id, child_id from sub")) == {(11, 50), (33, 50)}
+        assert len(ElementTree.fromstring(output(clean=True)).findall(".//sub")) == 2
+        _, _, created, _ = ops.createEntry(db, ops.readDictConfigs(db), "<entry>Added in the editor</entry>", "test@lexonomy")
+        assert created
+        assert ElementTree.fromstring(output()).findall("section/entry")[-1].text == "Added in the editor"
+
+        # An archival restore is independent of extraction settings.
+        ops.updateDictConfig(db, "document-roundtrip", "subbing", {})
+        assert load(archive.encode(), purge_history=True) == 2
+        assert set(tuple(row) for row in db.execute("select parent_id, child_id from sub")) == {(11, 50), (33, 50)}
+        assert len(ElementTree.fromstring(output()).findall(".//sub")) == 1
+
+        assert load(b"<?xml version='1.0'?><addition><note>also kept</note><entry>new</entry></addition>") == 1
+        assert ElementTree.fromstring(output()).findtext("addition/note") == "also kept"
+        old = output()
+        bad_reference = archive.replace('id="50" title=', 'id="900" title=')
+        assert bad_reference != archive
+        try:
+            load(bad_reference.encode(), purge_history=True)
+        except ValueError as error:
+            assert "missing subentry" in str(error)
+        else:
+            raise AssertionError("A dangling archival reference was accepted.")
+        assert output() == old
+        assert db.execute("pragma foreign_key_check").fetchall() == []
+    print("PASS XML archives retain document structure, namespaces and shared subentry identity")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    with closing(ops.getDB("document-roundtrip")) as db:
+        configs = ops.readDictConfigs(db)
+        id, _, success, _ = ops.createEntry(db, configs, "<entry><term>New headword</term></entry>", "test@lexonomy")
+        assert success
+        old_xml = db.execute("select xml from entries where id=?", (id,)).fetchone()[0]
+        history_count = db.execute("select count(*) from history").fetchone()[0]
+        with db:
+            db.execute("update entries set needs_update=1 where id=?", (id,))
+            db.execute("delete from searchables where entry_id=?", (id,))
+        assert ops.reindex_entries(db, ids=[id]) == 1
+        assert db.execute("select xml from entries where id=?", (id,)).fetchone()[0] == old_xml
+        assert db.execute("select count(*) from history").fetchone()[0] == history_count
+        assert db.execute("select txt from searchables where entry_id=? and level=2", (id,)).fetchone()[0] == "New headword"
+    print("PASS Reindexing refreshes derived fields without rewriting source or history")
 except Exception:
     failures += 1
     traceback.print_exc()

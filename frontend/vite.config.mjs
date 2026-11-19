@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig, loadEnv } from 'vite'
 
@@ -8,6 +9,19 @@ export default defineConfig(({ command, mode }) => {
       base: command === 'build' ? './' : '/',
       plugins: [vue()],
       build: { assetsInlineLimit: 512 }
+   }
+   if (process.env.VITE_LEXONOMY_REVISION === undefined) {
+      try {
+         const [revision, message] = execFileSync('git', ['log', '-1', '--format=%H%x00%B'], {
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']
+         }).trimEnd().split('\0')
+         config.define = {
+            'import.meta.env.VITE_LEXONOMY_REVISION': JSON.stringify(revision),
+            'import.meta.env.VITE_LEXONOMY_COMMIT_MESSAGE': JSON.stringify(message || '')
+         }
+      } catch {
+         // Source archives can build without Git metadata.
+      }
    }
    if (command === 'build') return config
 

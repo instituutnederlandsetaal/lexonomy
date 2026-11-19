@@ -6,7 +6,10 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
 
 ARG VER=dev
-RUN VITE_LEXONOMY_VERSION="$VER" npm run build
+ARG GIT_REVISION
+ARG GIT_MESSAGE
+RUN VITE_LEXONOMY_VERSION="$VER" VITE_LEXONOMY_REVISION="$GIT_REVISION" \
+    VITE_LEXONOMY_COMMIT_MESSAGE="$GIT_MESSAGE" npm run build
 
 FROM python:3.12-alpine3.24 AS backend
 WORKDIR /opt/service/api

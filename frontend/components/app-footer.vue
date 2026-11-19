@@ -17,7 +17,7 @@
             </span>
          </div>
          <div class="version right">
-            <span>Version:<br>{{ version }}</span>
+            <span :title="commitDetails">Version:<br>{{ version }}</span>
             <a href="https://github.com/elexis-eu/lexonomy" target="_blank" aria-label="Lexonomy on GitHub">
                <span class="githublogo" aria-hidden="true"/>
             </a>
@@ -28,6 +28,8 @@
 
 <script setup lang="ts">
 const version = import.meta.env.VITE_LEXONOMY_VERSION || 'dev'
+const commitDetails = [import.meta.env.VITE_LEXONOMY_REVISION, import.meta.env.VITE_LEXONOMY_COMMIT_MESSAGE]
+   .filter(Boolean).join('\n\n') || undefined
 </script>
 
 <style>

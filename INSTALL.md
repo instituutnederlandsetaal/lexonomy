@@ -59,13 +59,13 @@ LEXONOMY_BACKEND_URL=https://lexonomy.example.org/lexonomy/ docker compose -f do
 
 ## Install from source
 
-Use Python 3.12 and Node.js 22.12 or newer. PyICU requires ICU development libraries, `pkg-config`, and a C++ compiler when it builds from source.
+Install uv and use Node.js 22.12 or newer. The commands below select Python 3.12. PyICU requires ICU development libraries, `pkg-config`, and a C++ compiler when it builds from source. [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
 
 ```sh
 cd api
-python3 -m venv .venv
+uv venv --python 3.12
 . .venv/bin/activate
-python -m pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 cd ../frontend
 npm ci

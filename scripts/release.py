@@ -6,7 +6,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from tempfile import mkdtemp
+from tempfile import TemporaryDirectory, mkdtemp
 
 from version import VERSION
 
@@ -68,13 +68,20 @@ def last_release(head, branch):
 
 
 def run_checks():
+    if not shutil.which("uv"):
+        raise SystemExit("Install uv to run the release checks. https://docs.astral.sh/uv/getting-started/installation/")
     subprocess.run(["npm", "run", "typecheck"], cwd="frontend", check=True)
-    subprocess.run([sys.executable, "-m", "ruff", "check", "--select", "E9,F63,F7,F82",
-                    "api", "scripts"], check=True)
-    subprocess.run(["npm", "test"], cwd="frontend", check=True)
-    for test in sorted(Path("api").glob("test-*.py")):
-        subprocess.run([sys.executable, test.name], cwd="api", check=True)
-    subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "scripts"], check=True)
+    with TemporaryDirectory(prefix="lexonomy-checks-") as venv:
+        subprocess.run(["uv", "venv", "--python", "3.12", venv], check=True)
+        python = str(Path(venv) / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+        subprocess.run(["uv", "pip", "install", "--python", python,
+                        "-r", "api/requirements.txt", "ruff==0.17.5"], check=True)
+        subprocess.run([python, "-m", "ruff", "check", "--select", "E9,F63,F7,F82",
+                        "api", "scripts"], check=True)
+        subprocess.run(["npm", "test"], cwd="frontend", check=True)
+        for test in sorted(Path("api").glob("test-*.py")):
+            subprocess.run([python, test.name], cwd="api", check=True)
+        subprocess.run([python, "-m", "unittest", "discover", "-s", "scripts"], check=True)
 
 
 def edit_notes(version, previous_tag, head, branch):

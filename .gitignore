@@ -5,8 +5,8 @@ node_modules/
 
 /data/
 /lexonomy.sqlite
-/website/config.js
-/website/siteconfig.json
-/website/dist/
-/website/.venv/
-/website/venv/
+siteconfig.json
+/api/version.txt
+/api/.venv/
+/api/venv/
+/frontend/dist/

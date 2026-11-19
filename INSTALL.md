@@ -13,11 +13,20 @@ Open [http://localhost:8000/](http://localhost:8000/). With the default configur
 
 Set `VER` when building to use a different image tag and display version. The default is `dev`.
 
-## Frontend development
-
-Use Node.js 22.12 or newer. From `website`, install dependencies and start the Vite server.
+Run this command to reset the password for an existing account.
 
 ```sh
+docker compose exec lexonomy python adminscripts/changePassword.py root@localhost
+```
+
+The command prints the new password. In the development stack, use `docker compose -f docker-compose.dev.yml exec backend` in place of `docker compose exec lexonomy`.
+
+## Frontend development
+
+Use Node.js 22.12 or newer. From the repository root, run the frontend tools in `frontend/`.
+
+```sh
+cd frontend
 npm ci
 npm start
 ```
@@ -53,20 +62,44 @@ LEXONOMY_BACKEND_URL=https://lexonomy.example.org/lexonomy/ docker compose -f do
 Use Python 3.12 and Node.js 22.12 or newer. PyICU requires ICU development libraries, `pkg-config`, and a C++ compiler when it builds from source.
 
 ```sh
-cd website
+cd api
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
 cp siteconfig.json.template siteconfig.json
+
+cd ../frontend
 npm ci
 npm run build
 ```
 
-Vite writes `index.html` and assets with content hashes to `website/dist/`. Bottle serves this build and the API from the same origin. You can skip the frontend build if you only use the Vite dev server.
+Vite writes the production site to `frontend/dist/`. It hashes bundled files and copies the guide and licence icons from `frontend/public/` at stable URLs. Bottle serves the build and the API from the same origin. You can skip the build if you only use the Vite dev server.
 
 ## Configuration
 
-Set `LEXONOMY_SITECONFIG` to load a different backend configuration. To customize the production Compose service, point its configuration mount at your own copy of the template. For Docker development, set `LEXONOMY_DEV_SITECONFIG` to the name of a configuration file inside `website`.
+The server and admin scripts load `api/siteconfig.json` by default. Set `LEXONOMY_SITECONFIG` to an absolute path or a path relative to `api/` to select another file. The startup logs report the file in use.
+
+The production image ships with the template as its default. To customize it, copy `api/siteconfig.json.template` to `api/siteconfig.json` on the host and add this to `docker-compose.override.yml` in the repository root.
+
+```yaml
+services:
+    lexonomy:
+        volumes:
+            - type: bind
+              source: ./api/siteconfig.json
+              target: /opt/service/api/siteconfig.json
+              read_only: true
+              bind:
+                  create_host_path: false
+```
+
+Run `docker compose up -d --force-recreate lexonomy` after changing the file. If you mount the file elsewhere, set `LEXONOMY_SITECONFIG` in the service's `environment` to its container path.
+
+In Docker development, the backend loads the template by default. Set `LEXONOMY_DEV_SITECONFIG=siteconfig.json` when starting the dev stack to use your copy.
+
+Server operators manage site-wide settings in the configuration file. The browser reads the base URL, licences, consent notices, and first-run setup status. The startup logs show the path inside the container so you can identify the file or bind mount in use.
+
+If you are upgrading a source checkout, move your existing `website/siteconfig.json` to `api/siteconfig.json` before starting the server. If your Compose override mounts the file at `/opt/service/website/siteconfig.json`, update the mount target to `/opt/service/api/siteconfig.json`. Keep the existing database volume at `/opt/service/data`.
 
 ### Base URL
 
@@ -98,7 +131,7 @@ This is the path at which Lexonomy listens for incoming HTTP requests on the ser
 "port": 8000
 ```
 
-This is the port number at which Lexonomy listens for incoming HTTP requests.
+This is the fallback listen port for a source installation when `baseUrl` has no explicit port. Docker listens on port 8000 inside the container. To change the external port, change the published port in Compose and update `baseUrl`.
 
 ### Data directory
 
@@ -108,7 +141,7 @@ This is the port number at which Lexonomy listens for incoming HTTP requests.
 
 This is the path to the `data` folder where Lexonomy will store all its data, including (importantly) all the dictionaries. Note that the directory name does not have to be `data`, it can be anything you want.
 
-If the path given here is relative, it is interpreted relatively to the web application's current directory (= the `website` directory). It can also be an absolute path, eg. `/home/joebloggs/lexonomydata/`.
+Relative paths start in `api/`, or `/opt/service/api` in Docker. You can also use an absolute path such as `/home/joebloggs/lexonomydata/`.
 
 Upon start, Lexonomy creates three subdirectories automatically:
 
@@ -130,7 +163,7 @@ If you set this to `true` Lexonomy will report each HTTP request (except request
 "welcome": "Welcome to your <a href='http://www.lexonomy.eu/'>Lexonomy</a> installation."
 ```
 
-This is the welcome message displayed on the home page of your Lexonomy installation (left of the log-in box).
+The current login page ignores this legacy setting.
 
 ### Admin accounts
 
@@ -142,7 +175,7 @@ Accounts listed here can administer the installation. Browser setup creates `roo
 
 ## Start a source installation
 
-From `website`, initialize and upgrade the databases, then start the server.
+From `api/`, initialize and upgrade the databases, then start the server.
 
 ```sh
 python3 adminscripts/init.py
@@ -153,8 +186,8 @@ python3 lexonomy.py
 
 Open [http://localhost:8000/](http://localhost:8000/) with the default configuration. Enter the setup code printed by the initializer to create `root@localhost`. For subsequent upgrades, rebuild the frontend and run the same startup commands. Docker runs the database scripts before starting the server.
 
-Accounts created through Sketch Engine can set a local password through **Forgot password?** when email is configured. An administrator with server access can also set a password with `python3 adminscripts/changePassword.py user@example.com` from `website`.
+Accounts created through Sketch Engine can set a local password through **Forgot password?** when email is configured. An administrator with server access can also set a password with `python3 adminscripts/changePassword.py user@example.com` from `api/`.
 
 ## Run the tests
 
-After installing the Python requirements, run `python3 test-import.py` and `python3 test-initial-admin.py` from `website`. Both suites create their own temporary databases.
+After installing the Python requirements, run `python3 test-import.py` and `python3 test-initial-admin.py` from `api/`. Both suites create their own temporary databases.

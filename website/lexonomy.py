@@ -2,7 +2,6 @@
 
 import os
 from sqlite3 import Connection
-import sqlite3
 import sys
 import functools
 from typing import Any, TYPE_CHECKING
@@ -15,7 +14,7 @@ import urllib.request
 from ops import siteconfig
 import media
 import bottle
-from bottle import (hook, route, get, post, run, template, error, request,
+from bottle import (hook, route, get, post, run, error, request,
                     response, static_file, abort, redirect, install)
 
 from ops import Configs, User

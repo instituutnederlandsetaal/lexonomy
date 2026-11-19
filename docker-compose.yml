@@ -6,12 +6,10 @@ services:
             args:
                 VER: ${VER:-dev}
         volumes:
-            - ./website/siteconfig.json.template:/opt/service/website/siteconfig.json
-            - ./website/config.js.template:/opt/service/website/config.js
+            - ./website/siteconfig.json.template:/opt/service/website/siteconfig.json:ro
+            - ./website/config.js.template:/opt/service/website/config.js:ro
             - lexonomy_data:/opt/service/data
         ports:
             - "8000:8000"
-            - "5678:5678"  # Debug port
 volumes:
-  lexonomy_data:
-
+    lexonomy_data:

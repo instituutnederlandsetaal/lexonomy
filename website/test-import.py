@@ -1,18 +1,22 @@
+from __future__ import annotations
+
 import inspect
 import json
+import os
+from pathlib import Path
 import re
+import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import traceback
-from typing import Any, Callable, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, TypedDict, Union
 
-import ops
 from bs4 import Tag
-from ops import Configs
 
+if TYPE_CHECKING:
+    from ops import Configs
 
-# Run a bunch of tests to check whether import functions behave as expected
-# Usage: python3 test-import.py, assuming working directory website and lexonomy database has been initialized.
-# Maybe use a proper test framework here.
+# Run python3 test-import.py from website to check imports against a temporary database.
 
 # Some documentation:
 # testables array contains objects that each describe a "test"
@@ -71,13 +75,15 @@ class Test(TypedDict):
         actions: ["create", ["delete", 100]] # first run create action, then delete action for entry ID 100.
     """
 
-    debug: bool
-    """Break into the debugger on this test (if attached)"""
+test_directory = TemporaryDirectory(prefix="lexonomy-import-")
+test_config_path = Path(test_directory.name) / "siteconfig.json"
+test_config = json.loads(Path("siteconfig.json.template").read_text(encoding="utf-8"))
+test_config.update(dataDir=test_directory.name, admins=[])
+test_config_path.write_text(json.dumps(test_config), encoding="utf-8")
+os.environ["LEXONOMY_SITECONFIG"] = str(test_config_path)
+subprocess.run([sys.executable, "adminscripts/init.py"], check=True)
 
-try:
-    ops.destroyDict("#test")
-except:
-    pass
+import ops
 
 ops.makeDict("#test", "blank", "test", "test", "root@localhost")
 
@@ -801,11 +807,10 @@ def test(tests, id: int, description: str):
         for subentryID, subentryTests in tests.get("subentrytests", {}).items():
             test(subentryTests, subentryID, description + f" [subentry {subentryID}]")
 
+failures = 0
 for tests in testables:
     try:
         # Override configs for this test, if supplied.
-        if tests.get("debug"):
-            breakpoint()
         configs = overwriteConfig(configsFromDB, tests.get("configs", {}))
         description = tests["description"]
 
@@ -831,19 +836,18 @@ for tests in testables:
             elif action == "update": 
                 ops.createEntry(dictDB, configs, params[0], params[1], params[2])
             else:
-                print(f"ERROR - Unknown action '{action}' - ignoring", file=sys.stderr)
+                raise ValueError(f"Unknown test action: {action}")
 
         test(tests, id, description)
         print(f"PASS {description}")
 
     except Exception as e:
-        breakpoint()
+        failures += 1
         if type(e) == Exception:
-            print(e)
+            print(e, file=sys.stderr)
         else:
-            print(e)
             traceback.print_exc()
 
 dictDB.close()
-dictDB = None
-ops.destroyDict("#test")
+test_directory.cleanup()
+sys.exit(bool(failures))

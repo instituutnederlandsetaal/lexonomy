@@ -1,24 +1,10 @@
-# editor
+# Graphical XML editor
 
-## Project setup
-```
-npm install
-```
+From `website/editor` run `npm ci` to install the editor dependencies.
 
-### Compiles and hot-reloads for development
-```
-npm run serve
-```
+- `npm run build` writes the editor bundles to `website/dist/editor`.
+- `npm run serve` serves the bundles at `http://localhost:8081/`. Enable
+  `GRAPHICAL_EDITOR_WEBPACK_DEV_SERVER_URL` in `website/config.js` to load them in Lexonomy.
+- `npm run lint -- --no-fix` checks for lint errors.
 
-### Compiles and minifies for production
-```
-npm run build
-```
-
-### Lints and fixes files
-```
-npm run lint
-```
-
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
+See the repository's [installation instructions](../../INSTALL.md) to run Lexonomy and build both frontends.

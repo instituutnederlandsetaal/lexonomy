@@ -27,19 +27,6 @@
     display: none;
   }
 }
-#toolbar button.iconYes#butNew {background-image: url(./furniture/lightning.png);}
-#toolbar button.iconOnly#butOpen {background-image: url(./furniture/resultset_next.png);}
-#toolbar button.iconYes#butSave {background-image: url(./furniture/disk.png);}
-#toolbar button.iconYes#butSave span.star {color: #ff0000; position: relative; top: 2px;}
-#toolbar button.iconYes#butEdit {background-image: url(./furniture/cut.png);}
-#toolbar button.iconYes#butView {background-image: url(./furniture/arrow_left.png);}
-#toolbar button.iconYes#butLeave {background-image: url(./furniture/arrow_left.png);}
-#toolbar button.iconYes#butNonew {background-image: url(./furniture/arrow_left.png);}
-#toolbar button.iconYes#butDelete {background-image: url(./furniture/delete.png);}
-#toolbar button.iconYes#butClone {background-image: url(./furniture/lightning.png);}
-#toolbar button.iconOnly#butSourceCode {background-image: url(./furniture/page_white_text.png); float: right;}
-#toolbar button.iconOnly#butHistory {background-image: url(./furniture/time.png); float: right;}
-#toolbar button.iconOnly#butLink {background-image: url(./furniture/link.png); float: right;}
 #toolbar span#errorMessage {float: right; padding: 6px 10px; margin: 10px 5px; min-height: 1.3em; display: inline-block; color: #aa0000; font-size: 0.85em;}
 
 #toolbar a {color: var(--link); padding: 5px 0px; margin: 10px 5px; min-height: 1.3em; display: inline-block; padding-left: 35px; background-position: left+10px center; background-repeat: no-repeat; text-decoration: none;}
@@ -56,7 +43,6 @@
 }
 
 #history { /*position: absolute;*/ top: 53px; bottom: 0px; right: 0px; width: 250px; background-color: #ffffff; z-index: 0; }
-#history > iframe {width: 100%; height: 100%;}
 
 #sourceCode {/*position: absolute;*/ top: 0px; left: 0px; right: 0px; bottom: 0px; /*padding: 20px 40px 40px 20px;*/ background-color: #eeeeee;}
 #sourceCode textarea {width: 100%; height: 100%; border: 1px solid #cccccc; box-shadow: inset 0px 0px 2px #666666; padding: 9px; resize: none; font-family: monospace; font-size: 0.85rem; border-radius: 4px; line-height: 1.5em; color: #666666; white-space: pre;}

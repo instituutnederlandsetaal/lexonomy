@@ -62,8 +62,7 @@ you are working:
 
 We have a few ideas about how git commit messages should be formatted. We
 think, this leads to **more readable messages** that are easy to follow when
-looking through the **project history**. We also use some git commit messages
-to **generate the [change log][CHANGELOG]**.
+looking through the **project history**.
 
 ### Commit Message Format
 Each commit message consists of a **subject**, a **body** and a **footer**.
@@ -119,7 +118,6 @@ Help us keep Lexonomy open and inclusive. Please read and follow our [Code of Co
 [github]: https://github.com/elexis-eu/lexonomy/
 [js-style-guide]: https://standardjs.com/rules.html
 [py-style-guide]: https://www.python.org/dev/peps/pep-0008/
-[CHANGELOG]: https://github.com/elexis-eu/lexonomy/blob/master/CHANGELOG.md
 [individual-cla]: FIXME
 [corporate-cla]: FIXME
 [coc]: https://github.com/elexis-eu/lexonomy/blob/master/CODE_OF_CONDUCT.md

@@ -1,89 +1,57 @@
-This page explains what you must do to set up a local installation of Lexonomy
-on your own computer or adapt a version to run on a server.
+# Local installation
 
-# Preliminary remarks
+## Docker Compose
 
-Lexonomy's backend is written in [Python](https://python.org). That means that as of now you need
-a working installation of Python >=3.9
+From the repository root, build and start Lexonomy.
 
-You also need to download the source code from this repository into a directory
-on your computer.
-
-# Run Lexonomy
-
-Whichever way you choose to run Lexonomy locally, with the default
-configuration:
-- An instance of Lexonomy will start at the address http://localhost:8000/
-- You should be able to navigate to this address with your web browser and see
-  Lexonomy's home page
-
-## Prerequisites
-
-- [Download and install Python](https://www.python.org/downloads/) 3.9+
-- [Download and install the JWT module for Python3](https://github.com/jpadilla/pyjwt)
-- [Download and install the LXML module for Python3](https://lxml.de/installation.html)
-- [Download and install the Markdown module for Python3](https://python-markdown.github.io/)
-- [Download and install NodeJS to build the frontend](https://nodejs.org/en/)
-
-# Configuring your Lexonomy
-The frontend configuration file is `website/config.js`. The most important setting is the URL of the backend configuration (as `window.API_URL`), which should in most cases be the same as `baseUrl` specified below. However, you can point Lexonomy frontend to an arbitrary backend installation.
-You can also use this file to load the Vue-based graphical editor from webpack directly (during development, see inside the file for further instructions).
-
-By default, backend configuration is located in the file `website/siteconfig.json`, however this can be changed by setting the `$LEXONOMY_SITECONFIG` environmental variable. This file contains some configuration options for your Lexonomy installation. Let's look at those options you will probably want to change at this stage.
-
-- In your terminal, go to the `website` directory of the repository:
 ```sh
-cd website
+docker compose up --build -d
+docker compose logs lexonomy
 ```
 
-- Copy `siteconfig.json.template` to `siteconfig.json`; this is the backend configuration
+Open [http://localhost:8000/](http://localhost:8000/). On first startup, the logs show the generated password for `root@localhost`. `docker compose down` stops Lexonomy and keeps its database in the `lexonomy_data` volume.
+
+Set `VER` when building to use a different image tag and display version. The default is `dev`.
+
+## Install from source
+
+Use Python 3.12 and Node.js 22 to match the Docker build. PyICU requires ICU development libraries, `pkg-config`, and a C++ compiler when it builds from source.
+
 ```sh
+cd website
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 cp siteconfig.json.template siteconfig.json
-```
-
-- Copy `config.js.template` to `config.js`; this is the frontend configuration
-```sh
 cp config.js.template config.js
-```
-
-- Build the frontend.
-Lexonomy uses a combination of [https://riot.js.org/](Riot.js) for its menus, and [https://vuejs.org/](Vue) for the graphical xml editor.
-
-```sh
-make
-```
-It produces `website/dist`, containing the necessary javascript and css files for the general Lexonomy interface and the editor.
-Alternaltively the following commands perform a manual build:
-```sh
-cd website
-npm install
-cd editor 
-npm install
-cd ..
+npm ci
+npm --prefix editor ci
 npm run build
 ```
 
-During development it is also possible to automatically have the frontend rebuild on change by running `npm run watch`. To enable this for the Graphical Editor, you should enable the webpack url in `website/config.js`.
+The frontend build writes to `website/dist`. During development, `npm run watch` rebuilds Riot on changes and starts the graphical editor's dev server. Set `window.GRAPHICAL_EDITOR_WEBPACK_DEV_SERVER_URL` in `website/config.js` to use that server.
 
-# Backend configuration
+## Configuration
 
-## Base URL
+Set `window.API_URL` in `website/config.js` to the backend URL. It usually matches `baseUrl` in `website/siteconfig.json`. Set `LEXONOMY_SITECONFIG` to load a different backend configuration. To customize Compose, point its two configuration mounts at your own copies of the templates.
+
+### Base URL
 
 ```js
-"baseUrl": "http://localhost:8080/"
+"baseUrl": "http://localhost:8000/"
 ```
 
 This is the URL at which your Lexonomy installation is visible to web browsers. For reasons we will not go into now, Lexonomy needs to know that this URL is.
 
 - For Lexonomy's “home” installation this is `https://www.lexonomy.eu/`.
 
-- If you are testing a local installation on your own desktop computer then this is `http://localhost/`.
+- For a default local installation this is `http://localhost:8000/`.
 
 - If you are setting up your own installation on a web server somewhere then this should be any URL, such as `http://www.mylexonomy.com/`.
 
 Make sure the path (ie. the final forward slash) is included. If your installation of Lexonomy is meant to be accessible from the Internet at a URL that contains a path, such as `http://www.example.com/mylexonomy/`, then make sure to include the path `/mylexonomy/` in the URL too.
 
-## Root path
+### Root path
 
 ```js
 "rootPath": "/"
@@ -91,21 +59,15 @@ Make sure the path (ie. the final forward slash) is included. If your installati
 
 This is the path at which Lexonomy listens for incoming HTTP requests on the server. Under normal circumstances this should be the same as the path at the end of your URL, for example `/` or `/mylexonomy/`. If, however, you have a proxy server which listens for HTTP requests at one URL and then forwards them to another, then the first URL should be the `baseUrl` and the second URL's path should be the `rootPath`.
 
-## Port
+### Port
 
 ```js
-"port": 8080
+"port": 8000
 ```
 
 This is the port number at which Lexonomy listens for incoming HTTP requests.
 
-**Note:** When launched this way, Lexonomy runs on `port:8080`. To allow it to
-run on a privileged port (<1024) like, for example on `port:80`, you need superuser permissions:
-```bash
-sudo python3 lexonomy.py
-```
-
-## Data directory
+### Data directory
 
 ```js
 "dataDir": "../data/"
@@ -121,7 +83,7 @@ Upon start, Lexonomy creates three subdirectories automatically:
 - `uploads` – a directory for temporary storage of user-uploaded imports,
 - `sqlite_tmp` – a directory that SQLite will use as its temporary directory.
 
-## Logging
+### Logging
 
 ```js
 "verbose": false
@@ -129,7 +91,7 @@ Upon start, Lexonomy creates three subdirectories automatically:
 
 If you set this to `true` Lexonomy will report each HTTP request (except requests for static files) to standard error output (= to the command line or terminal) – useful for debugging.
 
-## Tracking code
+### Tracking code
 
 ```js
 "trackingCode": ""
@@ -137,7 +99,7 @@ If you set this to `true` Lexonomy will report each HTTP request (except request
 
 This is an HTML snippet which Lexonomy inserts into every public-facing web page. You can replace it with your own tracking code from Google Analytics, StatCounter or whatever other web analytics service you use, or leave it blank.
 
-## Welcome message
+### Welcome message
 
 ```js
 "welcome": "Welcome to your <a href='http://www.lexonomy.eu/'>Lexonomy</a> installation."
@@ -145,7 +107,7 @@ This is an HTML snippet which Lexonomy inserts into every public-facing web page
 
 This is the welcome message displayed on the home page of your Lexonomy installation (left of the log-in box).
 
-## Admin account(s)
+### Admin accounts
 
 ```js
 "admins": ["root@localhost"]
@@ -153,36 +115,20 @@ This is the welcome message displayed on the home page of your Lexonomy installa
 
 This is an array of one or more e-mail addresses. People listed here are administrators: they can access everything in Lexonomy (including other people's dictionaries) and, after they log in, they will see options to create/change/delete user accounts, which other users don't see. You probably want to change this to your own e-mail address, like `joebloggs@example.com`.
 
-# Initializing your application
+## Start a source installation
 
-Once you have updated `website/siteconfig.json` you need to run an initialization script to create user accounts for the administrators listed under `admins`. To do this, go to your terminal, go the `website` directory and run this:
+From `website`, create your configured `dataDir` and initialize the databases. The initialization script prints the passwords for newly created administrators.
 
-```
+```sh
+mkdir -p ../data
 python3 adminscripts/init.py
-```
-
-The script will tell you that it has created user accounts for the administrators and what their passwords are. You can use this information to log into your local installation of Lexonomy (and perhaps change the password then).
-
-# Running your installation
-
-Congratulations, your Lexonomy installation is now fully configured and ready to face the world. On this page, we have assumed you are running Lexonomy by typing `python3 lexonomy.py` into your terminal.
-
-## Running a standalone server
-
-```
+python3 adminscripts/updates.py
+python3 migrate.py
 python3 lexonomy.py
 ```
 
-starts a standalone web server. If you have the [Paste](https://pythonpaste.readthedocs.io/en/latest/) Python module installed, it will use that one (it provides a multi-threaded web server). Otherwise it will use a Bottle builtin web server which is single-threaded. To manage the server in a Linux environment, you can use the provided [systemd unit file](website/docs/lexonomy.service)
+Open [http://localhost:8000/](http://localhost:8000/) with the default configuration. For subsequent upgrades, rebuild the frontend and run `adminscripts/updates.py` and `migrate.py` before restarting the server. Docker runs these steps on startup.
 
-## Running as CGI or WSGI inside of Apache
+## Run the import tests
 
-You can run Lexonomy inside Apache as CGI or WSGI. For the latter please refer to the relevant [Bottle](http://bottlepy.org) documentation (the Bottle app is WSGI-compatible), for the former you can get inspiration in the [configuration file](website/docs/lexonomy_httpd.conf) that is part of Lexonomy.
-
-# Upgrading to newer versions
-
-You should generally be able to upgrade by copying new files over and running an update script to upgrade DB schemas. The upgrade script is idempotent so you may run it at any time or multiple times with no harm:
-
-```sh
-python3 adminscripts/updates.py
-```
+After installing the Python requirements, run `python3 test-import.py` from `website`. The tests create their own temporary databases.

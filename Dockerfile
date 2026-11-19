@@ -1,58 +1,34 @@
-# syntax=docker/dockerfile:1.7-labs
-
-FROM node:23-alpine AS builder
-ARG VER
-
-WORKDIR /opt/service
-
-RUN apk add --no-cache git
-
-COPY .git .git
-COPY --exclude=*.py website website 
+FROM node:22-alpine AS builder
 WORKDIR /opt/service/website
 
-# Get current git tag/commit hash (if no tag), and put in version.txt in /opt/service/website
-RUN VERSION=$(git describe --exact-match --tags 2>/dev/null || git rev-parse --short HEAD) && \
-echo "$VERSION" > version.txt
+COPY website/package.json website/package-lock.json ./
+COPY website/editor/package.json website/editor/package-lock.json ./editor/
+RUN --mount=type=cache,target=/root/.npm npm ci && npm --prefix editor ci
 
+COPY website/ ./
+RUN npm run build
 
-# Install dependencies for main website and vue-based editor with cache mounts
-RUN --mount=type=cache,target=/opt/service/website/node_modules \
-    npm ci
-RUN --mount=type=cache,target=/opt/service/website/editor/node_modules \
-    npm --prefix editor ci
-# builds both editor and riot templates, output in website/dist
-RUN --mount=type=cache,target=/opt/service/website/node_modules \
-    --mount=type=cache,target=/opt/service/website/editor/node_modules \
-    npm run build
-
-FROM python:3.12-alpine
-
-ARG VER
-
-WORKDIR /opt/service/
-
-COPY ./website/requirements.txt requirements.txt
-RUN apk add --no-cache --virtual .build-deps gcc g++ libxslt-dev libffi-dev openssl-dev icu-dev && \ 
-    apk add --no-cache libxml2 libxslt libffi openssl icu && \
-    apk add --no-cache sqlite && \
-    apk add --no-cache openjdk11-jre  $(: for Naisc ) && \
-    pip install --no-cache-dir -r requirements.txt && \
-    apk del .build-deps && \
-    [ -z "$VER" ] || echo "$VER" > version.txt
-
-COPY . /opt/service/
-COPY --from=builder /opt/service/website/dist /opt/service/website/dist
-# NOTE minor path difference here
-# Builder puts version outside website dir to improve caching of image layers
-COPY --from=builder /opt/service/website/version.txt /opt/service/website/version.txt
-
-RUN sed -i -e "s/@VERSION@/$(cat /opt/service/website/version.txt)/g" /opt/service/website/index*html
-
+FROM python:3.12-alpine3.24
 WORKDIR /opt/service/website
 
+COPY website/requirements.txt ./
+RUN apk add --no-cache icu libxslt openjdk11-jre-headless sqlite \
+    && apk add --no-cache --virtual .build-deps g++ icu-dev libxslt-dev \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apk del .build-deps
 
-# RUN pip install debugpy
-# ENTRYPOINT ["/bin/sh", "-c", "python3 adminscripts/init.py && python3 adminscripts/updates.py && python3 migrate.py && debugpy --listen 0.0.0.0:5678 --wait-for-client lexonomy.py 0.0.0.0:8000"]
+COPY website/ ./
+COPY --from=builder /opt/service/website/dist ./dist
 
-ENTRYPOINT ["/bin/sh", "-c", "python3 adminscripts/init.py && python3 adminscripts/updates.py && python3 migrate.py && python lexonomy.py 0.0.0.0:8000"]
+ARG VER=dev
+RUN case "$VER" in \
+        ''|*[!A-Za-z0-9_.-]*) echo 'VER must contain letters, digits, dots, underscores, or hyphens only' >&2; exit 1 ;; \
+    esac \
+    && mkdir -p ../data \
+    && cp siteconfig.json.template siteconfig.json \
+    && cp config.js.template config.js \
+    && printf '%s\n' "$VER" > version.txt \
+    && sed -i "s/@VERSION@/$VER/g" index.html
+
+EXPOSE 8000
+CMD ["sh", "-c", "python adminscripts/init.py && python adminscripts/updates.py && python migrate.py && exec python lexonomy.py 0.0.0.0:8000"]

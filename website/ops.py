@@ -1815,19 +1815,6 @@ def moveDict(oldID: str, newID: str):
     
     return True
 
-def getDoc(docID: str):
-    path = os.path.join("docs", docID + ".md")
-    if os.path.isfile(path):
-        doc = {"id": docID, "title":"", "html": ""}
-        html = markdown.markdown(open(path).read())
-        title = re.search('<h1>([^<]*)</h1>', html)
-        if title:
-            doc["title"] = re.sub('<\\/?h1>','', title.group(0))
-        doc["html"] = html
-        return doc
-    else:
-        return False
-
 class DictInfo(TypedDict):
     id: str
     title: str
@@ -2342,26 +2329,6 @@ def readNabesByEntryID(dictDB: Connection, dictID: str, entryID: int, configs: C
     # Return the surrounding entries, excluding the target entry
     return readEntries(dictDB, configs, nabes[i-8: i] + nabes[i+1:i+15], xml=False)
 
-
-def readNabesByText(dictDB: Connection, dictID: str, configs: Configs, text: str):
-    nabes: list[SortableEntry] = []
-    c = dictDB.execute("select id, sortkey from entries where doctype=? ", (configs["xema"]["root"],))
-    for r in c.fetchall():
-        nabes.append({"id": r["id"], "sortkey": r["sortkey"]})
-
-    # insert a fake ID we can find again later
-    nabes.append({"id": -1, "sortkey": text})
-    sortEntries(configs, nabes)
-
-    #select before/after entries
-    i = 0
-    for n in nabes:
-        if n["id"] == -1:
-            break
-        i += 1
-
-    # Return the surrounding entries, excluding the fake entry we put in the list
-    return readEntries(dictDB, configs, nabes[i-8: i] + nabes[i+1:i+15], xml=False)
 
 def readRandoms(dictDB: Connection):
     configs = readDictConfigs(dictDB)
@@ -2896,12 +2863,6 @@ def get_locales():
     for code in Locale().getAvailableLocales():
         codes.append({'code': code, 'lang': Locale(code).getDisplayName()})
     return codes
-
-def getLocale(configs):
-    locale = 'en'
-    if "locale" in configs["titling"] and configs["titling"]["locale"] != "":
-        locale = configs["titling"]["locale"]
-    return locale
 
 def extractText(xml, elName):
     elName = str(elName)

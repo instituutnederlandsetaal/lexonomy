@@ -202,8 +202,6 @@ const config = computed(() => {
 const editing = computed(() => config.value.editing)
 const sourceInputValue = computed(() => source.value.replace(/\r\n?/g, '\n'))
 const isEditing = computed(() => surface.value === 'edit')
-const protectedEntryId = computed(() => isEditing.value || surface.value === 'source' || reading.value || mutating.value
-   ? entry.value?.id ?? props.entryId : undefined)
 const dirty = unsavedEntry
 const historyId = computed(() => entry.value?.id || props.entryId || parseEntryId(idInput.value))
 const hasViewer = computed(() => {
@@ -236,7 +234,7 @@ onBeforeUnmount(() => {
    revision.value++
    unsavedEntry.value = false
 })
-defineExpose({ toggleEditing, save, protectedEntryId })
+defineExpose({ toggleEditing, save, allowFlagChange })
 
 function showLinkTarget() {
    if (surface.value !== 'view') return
@@ -251,6 +249,13 @@ function showLinkTarget() {
 function showStatus(text = 'Ready.', style = '') {
    status.value = text
    statusStyle.value = style
+}
+
+function allowFlagChange(id: number) {
+   const protectedEntry = isEditing.value || surface.value === 'source' || reading.value || mutating.value
+   if (!protectedEntry || id !== (entry.value?.id ?? props.entryId)) return true
+   showStatus('Finish editing before changing the flag.', 'warn')
+   return false
 }
 
 function fallBackToBuiltIn() {

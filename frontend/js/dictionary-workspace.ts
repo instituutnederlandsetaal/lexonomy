@@ -6,7 +6,7 @@ import { xmlElementName } from './xema.ts'
 import type { DictionaryPermissions, DictionarySettings } from './dictionary-config-api.ts'
 
 type DictionaryInfo = { title: string; blurb: string; licence: string; public: boolean }
-type EntrySummary = { id: number; doctype: string; title: string; titlePlain?: string; flag: string; isSaving?: boolean }
+export type EntrySummary = { id: number; doctype: string; title: string; titlePlain?: string; flag: string; isSaving?: boolean }
 export type EntrySearch = { searchtext: string; searchflag: string; modifier: string }
 export type WorkspaceConfig = Pick<DictionarySettings, 'xema' | 'xemplate' | 'subbing' | 'titling' | 'flagging' | 'editing'> & {
    linking: DictionarySettings['links']

@@ -26,50 +26,17 @@
                <DictEntryPagination :entry-count="activeDictionary.entryCount" :page-size="entryPageSize"
                   :page="activeDictionary.currentPage" :loading="activeDictionary.isEntryListLoading"
                   @previous="dictionaryWorkspace.previousPage()" @next="dictionaryWorkspace.nextPage()"/>
-               <div ref="entryList" class="entry-list collection">
-                  <div v-for="(entry, idx) in activeDictionary.entryList" :key="entry.id"
-                        :data-idx="idx" class="collection-item"
-                        :class="{ saving: entry.isSaving, selected: entry.id == activeDictionary.entryId, focused: idx + 1 === cursorPosition }"
-                        @click="onHeadwordClick(entry.id, $event)">
-                     <span class="lineNum">{{ idx + 1 }}.</span>
-                     <RouterLink :to="{ name: 'edit', params: { dictId: activeDictionary.dictId, doctype: activeDictionary.doctype, entryId: entry.id, mode: activeDictionary.mode }, query: $route.query }"
-                                 custom v-slot="{ href, navigate }">
-                        <a :href="entry.isSaving ? undefined : href" :aria-disabled="entry.isSaving || undefined"
-                           class="headword-link" :class="{ 'red-text': entry.id === activeDictionary.entryId }"
-                           @click.stop="onHeadwordLinkClick($event, Boolean(entry.isSaving), navigate)">
-                           <RawHtml :content="entry.title || '&amp;nbsp;' "/>
-                        </a>
-                     </RouterLink>
-                     <DropdownMenuRoot v-if="flags.length" :modal="false">
-                        <DropdownMenuTrigger type="button" class="flag" :class="entry.flag ? 'badge' : 'noFlag'"
-                                             :style="getFlagStyle(entry.flag)" :disabled="!canFlag(entry.id)"
-                                             :title="entryEditor?.protectedEntryId === entry.id ? 'Finish editing before changing the flag' : undefined"
-                                             :aria-label="'Flag for entry ' + entry.id"
-                                             @click.stop>
-                           {{ flagsByName.get(entry.flag)?.label || entry.flag || 'No flag' }}
-                        </DropdownMenuTrigger>
-                        <DropdownMenuPortal>
-                           <DropdownMenuContent class="entry-flag-menu" align="end" :side-offset="4" :collision-padding="8">
-                              <DropdownMenuItem @select="setFlag(entry.id, '')">
-                                 <i class="material-symbols-outlined grey-text" aria-hidden="true">label_outline</i>
-                                 <span>No flag</span>
-                                 <kbd>Delete</kbd>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem v-for="flag in flags" :key="flag.name"
-                                                @select="setFlag(entry.id, flag.name)">
-                                 <i class="material-symbols-outlined" :style="{ color: flag.color }" aria-hidden="true">label</i>
-                                 <span>{{ flag.label }}</span>
-                                 <kbd v-if="flag.key">{{ flag.key }}</kbd>
-                              </DropdownMenuItem>
-                           </DropdownMenuContent>
-                        </DropdownMenuPortal>
-                     </DropdownMenuRoot>
-                  </div>
-                  <div v-if="!activeDictionary.entryList.length && !activeDictionary.isEntryListLoading"
+               <ul ref="entryList" class="entry-list collection" aria-label="Entries" @keydown="onListKeyDown">
+                  <DictEntryRow v-for="(entry, idx) in activeDictionary.entryList" :key="entry.id"
+                     :entry="entry" :index="idx" :locate-entry="locateEntry"
+                     :selected="entry.id === activeDictionary.entryId"
+                     :can-change-flag="canEdit" :flags="flags"
+                     @select="selectEntry" @update:flag="setFlag(entry.id, $event)"/>
+                  <li v-if="!activeDictionary.entryList.length && !activeDictionary.isEntryListLoading"
                         style="padding-top: 10vh;">
                      <h2 class="grey-text center-align">No entries</h2>
-                  </div>
-               </div>
+                  </li>
+               </ul>
             </template>
             <LoadingOverlay v-if="activeDictionary.isEntryListLoading"/>
          </div>
@@ -88,131 +55,104 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import {
-   DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuRoot, DropdownMenuTrigger
-} from 'reka-ui'
-import { flagTextColor } from './entry-flags.js'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { stringifyQuery, useRouter, type LocationQuery, type RouteLocationRaw } from 'vue-router'
 import { activeDictionary, dictionaryWorkspace, entryPageSize } from '../js/dictionary-workspace.ts'
 import { myDictionaries } from '../js/my-dictionaries.ts'
 import DictEditEntry from './dict-edit-entry.vue'
 import DictEntryFilter from './dict-entry-filter.vue'
 import DictEntryPagination from './dict-entry-pagination.vue'
+import DictEntryRow from './dict-entry-row.vue'
 import DictNav from './dict-nav.vue'
 import LoadingOverlay from './loading-overlay.vue'
-import RawHtml from './raw-html.vue'
 
 const router = useRouter()
 const entryEditor = ref<InstanceType<typeof DictEditEntry> | null>(null)
 const entryColumn = ref<HTMLElement | null>(null)
-const entryList = ref<HTMLElement | null>(null)
-const focused = ref(false)
+const entryList = ref<HTMLUListElement | null>(null)
 const columnWidth = ref<number>()
-const cursorPosition = ref<number>()
+const entrySteps: Partial<Record<string, number>> = {
+   ArrowUp: -1, ArrowDown: 1, PageUp: -10, PageDown: 10, Home: -Infinity, End: Infinity
+}
 let selectFirst: { dictId: string; doctype: string } | undefined
 let resizeStart: { x: number; width: number; userSelect: string } | undefined
 
 const canEdit = computed(() => Boolean(activeDictionary.userAccess?.canEdit))
 const flags = computed(() => activeDictionary.config?.flagging.flags ?? [])
-const flagsByName = computed(() => new Map(flags.value.map(flag => [flag.name, flag])))
+const entryQuery = computed<LocationQuery>(previous => {
+   const query = router.currentRoute.value.query
+   return previous && stringifyQuery(previous) === stringifyQuery(query) ? previous : query
+})
+const locateEntry = computed(() => {
+   const { dictId, doctype, mode } = activeDictionary
+   const query = entryQuery.value
+   return (entryId: number): RouteLocationRaw => ({ name: 'edit', params: { dictId, doctype, entryId, mode }, query })
+})
 
 watch([() => activeDictionary.dictId, () => activeDictionary.doctype], ([dictId, doctype], [previousDictId]) => {
    if (selectFirst && (selectFirst.dictId !== dictId || selectFirst.doctype !== doctype)) selectFirst = undefined
    if (dictId !== previousDictId) {
-      focused.value = false
       columnWidth.value = undefined
       endResize()
    }
 })
-watch([() => activeDictionary.entryId, () => activeDictionary.entryList], ([id, entries]) => {
-   const index = id && entries?.findIndex(entry => entry.id === id)
-   cursorPosition.value = typeof index === 'number' && index >= 0 ? index + 1 : undefined
-   void scrollCursorIntoView()
+watch([entryList, () => activeDictionary.entryId, () => activeDictionary.entryList], () => {
+   revealSelection()
+   const entries = activeDictionary.entryList
    if (selectFirst && entries && selectFirst.dictId === activeDictionary.dictId && selectFirst.doctype === activeDictionary.doctype) {
       selectFirst = undefined
       if (entries[0]) void selectEntry(entries[0].id)
    }
-}, { immediate: true })
+}, { flush: 'post' })
 
 onMounted(() => {
-   document.addEventListener('click', onDocumentClick)
-   document.addEventListener('keydown', onDocumentKeyDown)
+   document.addEventListener('keydown', onEditorShortcut)
 })
 onBeforeUnmount(() => {
-   document.removeEventListener('click', onDocumentClick)
-   document.removeEventListener('keydown', onDocumentKeyDown)
+   document.removeEventListener('keydown', onEditorShortcut)
    endResize()
 })
 
-function getFlagStyle(flag: string) {
-   const backgroundColor = flagsByName.value.get(flag)?.color ?? 'initial'
-   return { color: flagTextColor(backgroundColor), backgroundColor }
-}
-
-function canFlag(id: number) {
-   return canEdit.value && entryEditor.value?.protectedEntryId !== id
-}
-
 function setFlag(id: number, flag: string) {
-   if (canFlag(id)) void dictionaryWorkspace.setEntryFlag(id, flag)
-}
-
-function onHeadwordClick(entryId: number, event: MouseEvent) {
-   onDocumentClick(event)
-   if (!(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) void selectEntry(entryId)
-}
-
-function onHeadwordLinkClick(event: MouseEvent, isSaving: boolean, navigate: (event: MouseEvent) => unknown) {
-   if (isSaving) {
-      event.preventDefault()
-      return
+   if (canEdit.value && entryEditor.value?.allowFlagChange(id) !== false) {
+      void dictionaryWorkspace.setEntryFlag(id, flag)
    }
-   onDocumentClick(event)
-   void navigate(event)
 }
 
 function selectEntry(entryId: number) {
-   const { dictId, doctype, mode } = activeDictionary
    if (entryId !== activeDictionary.entryId && !activeDictionary.entryList?.some(item => item.id === entryId && item.isSaving)) {
-      return router.push({ name: 'edit', params: { dictId, doctype, entryId, mode }, query: router.currentRoute.value.query })
+      return router.push(locateEntry.value(entryId))
    }
 }
 
-function onDocumentClick(event: MouseEvent) {
-   if (!(event.target instanceof Element) || !entryList.value) return
-   focused.value = entryList.value.contains(event.target)
-   const index = focused.value ? event.target.closest<HTMLElement>('.collection-item')?.dataset.idx : undefined
-   cursorPosition.value = index === undefined ? undefined : Number(index) + 1
-   void scrollCursorIntoView()
+function onEditorShortcut(event: KeyboardEvent) {
+   if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || !event.shiftKey) return
+   const key = event.key.toLowerCase()
+   if (key !== 'e' && key !== 's') return
+   if (document.activeElement?.closest('.editor-dialog, .graphical-action-menu, .form-select-content')) return
+   event.preventDefault()
+   if (key === 'e') entryEditor.value?.toggleEditing()
+   else entryEditor.value?.save()
 }
 
-function onDocumentKeyDown(event: KeyboardEvent) {
-   if (event.defaultPrevented) return
-   const key = event.key.toLowerCase()
-   if ((event.ctrlKey || event.metaKey) && event.shiftKey && ['e', 's'].includes(key)) {
-      if (document.activeElement?.closest('.editor-dialog, .graphical-action-menu, .form-select-content')) return
+function onListKeyDown(event: KeyboardEvent) {
+   const link = event.target
+   if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey ||
+       !(link instanceof HTMLAnchorElement) || !link.classList.contains('headword-link')) return
+   const step = entrySteps[event.key]
+   if (step !== undefined) {
       event.preventDefault()
-      if (key === 'e') entryEditor.value?.toggleEditing()
-      else entryEditor.value?.save()
+      const links = Array.from(entryList.value?.querySelectorAll<HTMLAnchorElement>(
+         ':scope > li > .headword-link:is([href], :focus)') ?? [])
+      links[Math.max(0, Math.min(links.length - 1, links.indexOf(link) + step))]?.focus()
       return
    }
-   if (!focused.value || !activeDictionary.entryList?.length ||
-       (event.target instanceof Element && event.target.closest('input, textarea, select, button, [contenteditable], [role=menu]'))) return
-   const entry = activeDictionary.entryList[(cursorPosition.value ?? 0) - 1]
-   switch (event.key) {
-      case 'ArrowUp': moveCursor(-1); break
-      case 'ArrowDown': moveCursor(1); break
-      case 'PageUp': moveCursor(-10); break
-      case 'PageDown': moveCursor(10); break
-      case 'Enter': if (entry) void selectEntry(entry.id); break
-      default: {
-         const flag = event.key === 'Delete' && flags.value.length ? '' : flags.value.find(item => item.key === event.key)?.name
-         if (!entry || flag === undefined) return
-         setFlag(entry.id, flag)
-      }
-   }
+   const flag = event.key === 'Delete' && flags.value.length ? '' : flags.value.find(item => item.key === event.key)?.name
+   const row = link.closest<HTMLElement>('.dict-entry-row')
+   const entry = activeDictionary.entryList?.[Number(row?.dataset.idx)]
+   if (!entry || flag === undefined) return
    event.preventDefault()
+   setFlag(entry.id, flag)
 }
 
 async function changeDoctype(doctype: string) {
@@ -224,23 +164,14 @@ async function changeDoctype(doctype: string) {
    if (failure && selectFirst === intent) selectFirst = undefined
 }
 
-function moveCursor(step: number) {
-   const count = activeDictionary.entryList?.length ?? 0
-   if (!count) return
-   if (cursorPosition.value == null) cursorPosition.value = step > 0 ? 1 : count
-   else cursorPosition.value = Math.max(1, Math.min(count, cursorPosition.value + step))
-   void scrollCursorIntoView()
-}
-
-async function scrollCursorIntoView() {
-   await nextTick()
+function revealSelection() {
    const list = entryList.value
-   const selected = list?.querySelector<HTMLElement>('.focused')
+   const selected = list?.querySelector<HTMLElement>('.dict-entry-row.selected')
    if (!list || !selected) return
-   const rowTop = selected.offsetTop
-   const max = list.scrollTop + list.clientHeight - selected.clientHeight
-   if (rowTop < list.scrollTop) list.scrollTop = rowTop
-   else if (rowTop > max) list.scrollTop = rowTop - list.clientHeight + selected.clientHeight
+   const top = selected.offsetTop
+   const bottom = top + selected.offsetHeight - list.clientHeight
+   if (top < list.scrollTop) list.scrollTop = top
+   else if (bottom > list.scrollTop) list.scrollTop = bottom
 }
 
 function startResize(event: PointerEvent) {
@@ -301,6 +232,7 @@ function resizeBy(amount: number) {
    background-color: #cfcfcf;
 }
 .dict-edit .entry-list {
+   position: relative;
    max-height: 80vh;
    overflow-y: auto;
    margin: 0;
@@ -316,92 +248,5 @@ function resizeBy(amount: number) {
 .dict-edit .dictRightCol{
    min-width: 500px;
    flex: 1;
-}
-.dict-edit .collection-item{
-   position: relative;
-   display: flex;
-   border-left: 5px solid white;
-   padding-left: 0.2rem;
-}
-.dict-edit .collection-item.selected{
-   border-left-color: #000;
-}
-.dict-edit .collection-item .headword-link{
-   text-decoration: none;
-   font-size: 1.2rem;
-   letter-spacing: 1px;
-   margin-right: auto;
-}
-.dict-edit .collection-item .flag {
-   border: 0;
-   background: transparent;
-   cursor: pointer;
-}
-.dict-edit .collection-item .flag:disabled { cursor: default; opacity: 0.7; }
-.entry-flag-menu {
-   background: #fff;
-   color: #333;
-   box-shadow: 0 2px 8px #0002;
-   min-width: 150px;
-   max-height: var(--reka-dropdown-menu-content-available-height);
-   overflow: auto;
-   z-index: 1000;
-}
-.entry-flag-menu [role="menuitem"] {
-   cursor: pointer;
-   display: flex;
-   align-items: center;
-   gap: 8px;
-   padding: 8px 12px;
-   outline: none;
-}
-.entry-flag-menu [data-highlighted] { background: #eee; }
-.entry-flag-menu kbd { margin-left: auto; }
-.dict-edit .collection-item .badge{
-   font-weight: bold;
-   font-size: 1rem;
-   color: #fff;
-   white-space: nowrap;
-   min-width: auto;
-   border-radius: 2px;
-   box-shadow: 0 2px 2px 0 rgb(0 0 0 / 14%),
-      0 3px 1px -2px rgb(0 0 0 / 12%),
-      0 1px 5px 0 rgb(0 0 0 / 20%);
-}
-.dict-edit .collection-item .noFlag{
-   font-size: 1rem;
-   color: grey;
-}
-.dict-edit .collection-item.saving::before{
-   content: '';
-   position: absolute;
-   left: 0;
-   right: 0;
-   top: 0;
-   bottom: 0;
-   background-color: #ffffffe8;
-   line-height: 100%;
-   z-index: 500;
-}
-.dict-edit .collection-item.saving::after{
-   content: 'saving...';
-   position: absolute;
-   transform: translateX(-50%) translateY(-50%);
-   left: 50%;
-   top: 50%;
-   color: #6e6e6e;
-   z-index: 501;
-   font-size: 1.3rem;
-   text-transform: uppercase;
-}
-.dict-edit .collection-item.focused{
-   background-color: #eceff1;
-}
-.dict-edit .lineNum{
-   font-size: 0.8rem;
-   color: #b8b8b8;
-   margin-right: 10px;
-   min-width: 30px;
-   text-align: right;
 }
 </style>

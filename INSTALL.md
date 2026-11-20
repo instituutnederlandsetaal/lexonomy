@@ -31,7 +31,7 @@ npm ci
 npm start
 ```
 
-Open [http://localhost:5173/](http://localhost:5173/). Vite applies Vue changes as you save and proxies application requests to `http://127.0.0.1:8000` by default. Start the Python backend separately using the source installation steps below, or point Vite at a running installation.
+Open [http://localhost:5173/](http://localhost:5173/). Vite applies Vue changes as you save and provides a local API URL in the HTML. It proxies that URL to `http://127.0.0.1:8000` by default. Start the Python backend separately using the source installation steps below, or set `LEXONOMY_BACKEND_URL` to the API root of a running installation.
 
 ```sh
 LEXONOMY_BACKEND_URL=http://127.0.0.1:9000 npm start
@@ -96,37 +96,27 @@ To change the config name or location, use environment variable `LEXONOMY_SITECO
 The production docker stack forwards this env var directly, the development stack instead forwards `LEXONOMY_DEV_SITECONFIG` as `LEXONOMY_SITECONFIG` inside the container.
 When running on the host, you should therefor use `LEXONOMY_SITECONFIG` to point to your configuration file (if you don't want to use the `config/` directory).
 
-### Base URL
+### Server and client URLs
 
-```js
-"baseUrl": "http://localhost:8000/"
-```
+Both settings are optional.
 
-This is the URL at which your Lexonomy installation is visible to web browsers. For reasons we will not go into now, Lexonomy needs to know that this URL is.
+- `serverUrl` tells Lexonomy where to listen for HTTP requests and under which path to serve the site and API. It defaults to `0.0.0.0:8000/`, which means all network interfaces, port 8000, and the root path. If you give only a path, Lexonomy uses the default host and port.
+- `clientUrl` is the public address Lexonomy uses in emails and exported entry links. Lexonomy includes it in `index.html` so the browser knows where to send API requests. If you leave it out or set it to `""`, Lexonomy uses `http://` with the host, port, and path from `serverUrl`, replacing `0.0.0.0` with `localhost`. If you give only a path, it uses `http://localhost:8000` with that path.
 
-- For Lexonomy's “home” installation this is `https://www.lexonomy.eu/`.
+| `serverUrl` in config | `clientUrl` in config | Where Lexonomy listens | Public API root |
+| --- | --- | --- | --- |
+| Omitted | Omitted | `0.0.0.0:8000/` | `http://localhost:8000/` |
+| `"/lexonomy/"` | `""` | `0.0.0.0:8000/lexonomy/` | `http://localhost:8000/lexonomy/` |
+| `"0.0.0.0:9000/lexonomy/"` | Omitted | `0.0.0.0:9000/lexonomy/` | `http://localhost:9000/lexonomy/` |
+| `"/"` | `"https://example.org/lexonomy/"` | `0.0.0.0:8000/` | `https://example.org/lexonomy/` |
 
-- For a default local installation this is `http://localhost:8000/`.
+In the last example, the proxy removes `/lexonomy/` when forwarding requests to Lexonomy. If the proxy keeps that prefix, set `serverUrl` to `"/lexonomy/"` as well. Redirect `/lexonomy` to `/lexonomy/` at the proxy and serve both the site and API at the public address.
 
-- If you are setting up your own installation on a web server somewhere then this should be any URL, such as `http://www.mylexonomy.com/`.
+When Vite serves the page during development, set `LEXONOMY_BACKEND_URL` to the API root Vite should forward requests to. It defaults to `http://127.0.0.1:8000` when you run Vite locally. [Frontend development](#frontend-development)
 
-Make sure the path (ie. the final forward slash) is included. If your installation of Lexonomy is meant to be accessible from the Internet at a URL that contains a path, such as `http://www.example.com/mylexonomy/`, then make sure to include the path `/mylexonomy/` in the URL too.
+Docker Compose publishes port 8000 by default. If you change the listen port in `serverUrl`, update the container side of the port mapping. If you change the published address, update `clientUrl`.
 
-### Root path
-
-```js
-"rootPath": "/"
-```
-
-This is the path at which Lexonomy listens for incoming HTTP requests on the server. Under normal circumstances this should be the same as the path at the end of your URL, for example `/` or `/mylexonomy/`. If, however, you have a proxy server which listens for HTTP requests at one URL and then forwards them to another, then the first URL should be the `baseUrl` and the second URL's path should be the `rootPath`.
-
-### Port
-
-```js
-"port": 8000
-```
-
-This is the fallback listen port for a source installation when `baseUrl` has no explicit port. Docker listens on port 8000 inside the container. To change the external port, change the published port in Compose and update `baseUrl`.
+When upgrading, move the old `baseUrl` value to `clientUrl` and put the backend's bind host, port and old `rootPath` into `serverUrl`. Until you do, Lexonomy reads the old fields as fallbacks. Move any bind address previously passed on the command line into `serverUrl`.
 
 ### Data directory
 

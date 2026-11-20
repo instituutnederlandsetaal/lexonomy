@@ -2,10 +2,10 @@
 
 import os
 from contextlib import closing
+from html import escape
 from pathlib import Path
 from urllib.parse import urlsplit
 from sqlite3 import Connection
-import sys
 import functools
 from typing import Any, TYPE_CHECKING
 import ops
@@ -38,28 +38,11 @@ app = bottle.default_app()
 app._handle = pathinfo_adjust_wrapper(app._handle)
 app.config['autojson'] = True
 bottle.BaseRequest.MEMFILE_MAX = 100 * 1024 * 1024 #10MB upload
-my_url = siteconfig["baseUrl"].split("://")[1].rstrip("/")
-cgi = False
-if "SERVER_NAME" in os.environ and "SERVER_PORT" in os.environ:
-    my_url = os.environ["SERVER_NAME"] + ":" + os.environ["SERVER_PORT"]
-    cgi = True
-if "HTTPS" in os.environ and os.environ["HTTPS"] == "on":
-    my_base_url = "https://" + my_url + "/"
-else:
-    my_base_url = "http://" + my_url + "/"
-
-# command-line arguments (unless CGI)
-if not cgi and len(sys.argv) > 1:
-    if sys.argv[1] in ["-h", "--help"] or len(sys.argv) != 2:
-        print("Usage: %s SERVER:PORT, which default to %s" % (sys.argv[0], my_url), file=sys.stderr)
-        print(sys.argv, file=sys.stderr)
-        sys.exit(1)
-    my_url = sys.argv[1]
+host, port, root_path = siteconfig["serverAddress"]
 
 api_dir = Path(__file__).resolve().parent
 frontend_dist = api_dir.parent / "frontend" / "dist"
-root_path = siteconfig["rootPath"]
-public_path = urlsplit(siteconfig["baseUrl"]).path or "/"
+public_path = urlsplit(siteconfig["clientUrl"]).path or "/"
 
 
 @get(root_path + "<directory:re:assets|docs|furniture>/<filename>")
@@ -209,18 +192,20 @@ def authAdmin(func: Any):
 #homepage
 @get(root_path)
 def home():
-    if not (frontend_dist / "index.html").is_file():
+    try:
+        html = (frontend_dist / "index.html").read_text(encoding="utf-8")
+    except FileNotFoundError:
         return HTTPResponse("Run npm run build from frontend/, or open the Vite dev server.", status=503)
-    return static_file("index.html", root=frontend_dist,
-                       headers={"Cache-Control": "no-cache"})
+    api_root = escape(siteconfig["clientUrl"], quote=True)
+    html = html.replace("</head>", f'<meta name="lexonomy-api-root" content="{api_root}">\n</head>', 1)
+    return HTTPResponse(html, headers={"Cache-Control": "no-cache"})
 
-@get(siteconfig["rootPath"] + "siteconfigread.json")
+@get(root_path + "siteconfigread.json")
 def lexonomyconfig():
     with closing(ops.getMainDB()) as conn:
         setup_required = pending_code_digest(conn, siteconfig) is not None
     configData = {
         "licences": siteconfig['licences'],
-        "baseUrl": siteconfig['baseUrl'],
         "setupRequired": setup_required,
     }
     if "consent" in siteconfig and siteconfig["consent"].get("terms") != "":
@@ -233,25 +218,25 @@ def initialize_admin():
         success = create_initial_admin(conn, siteconfig, request.forms.code, request.forms.password)
     return {"success": success}
 
-@get(siteconfig["rootPath"] + "userdicts.json")
+@get(root_path + "userdicts.json")
 @auth
 def listuserdicts(user: User):
     dicts = ops.getDictsByUser(user["email"])
     return {"dicts": dicts}
 
-@get(siteconfig["rootPath"] + "<dictID>/stats.json")
+@get(root_path + "<dictID>/stats.json")
 @authDict(["canEdit"])
 def getStats(dictID: str, user: User, dictDB: Connection, configs: Configs):
     return ops.getDictStats(dictDB)
 
-@post(siteconfig["rootPath"] + "<dictID>/entrydelete.json")
+@post(root_path + "<dictID>/entrydelete.json")
 @authDict(["canEdit"])
 def entrydelete(dictID: str, user: User, dictDB: Connection, configs: Configs):
     entryID = int(request.forms.id)
     ops.deleteEntry(dictDB, configs, entryID, user["email"])
     return {"success": True, "id": entryID}
 
-@post(siteconfig["rootPath"]+"<dictID>/entryread.json")
+@post(root_path+"<dictID>/entryread.json")
 @authDict([])
 def entryread(dictID: str, user: User, dictDB: Connection, configs: Configs):
     entryID = int(request.forms.id)
@@ -271,14 +256,14 @@ def entry_save_result(dictDB, configs, id, xml, success, feedback):
                       **ops.get_entry_rendering(dictDB, content, render))
     return result
 
-@post(siteconfig["rootPath"]+"<dictID>/entryupdate.json")
+@post(root_path+"<dictID>/entryupdate.json")
 @authDict(["canEdit"])
 def entryupdate(dictID: str, user: User, dictDB: Connection, configs: Configs):
     entryID = int(request.forms.id ) if request.forms.id else None
     saved = ops.createEntry(dictDB, configs, xml=request.forms.content, email=user["email"], id=entryID)
     return entry_save_result(dictDB, configs, *saved)
 
-@post(siteconfig["rootPath"]+"<dictID>/entrycreate.json")
+@post(root_path+"<dictID>/entrycreate.json")
 @authDict(["canEdit"])
 def entrycreate(dictID: str, user: User, dictDB: Connection, configs: Configs):
     xml = request.forms.content
@@ -294,7 +279,7 @@ def entrycreate(dictID: str, user: User, dictDB: Connection, configs: Configs):
     saved = ops.createEntry(dictDB, configs, xml, email=user["email"])
     return entry_save_result(dictDB, configs, *saved)
 
-@post(siteconfig["rootPath"]+"<dictID>/entryflag.json")
+@post(root_path+"<dictID>/entryflag.json")
 @authDict(["canEdit"])
 def entryflag(dictID: str, user: User, dictDB: Connection, configs: Configs):
     entryID = int(request.forms.id)
@@ -302,7 +287,7 @@ def entryflag(dictID: str, user: User, dictDB: Connection, configs: Configs):
     dictDB.commit()
     return {"success": feedback is None, "id": entryID, "feedback": feedback}
 
-@get(siteconfig["rootPath"]+"<dictID>/subget")
+@get(root_path+"<dictID>/subget")
 @authDict(["canEdit"])
 def subget(dictID: str, user: User, dictDB: Connection, configs: Configs):
     doctype = request.query.doctype
@@ -331,20 +316,20 @@ def subget(dictID: str, user: User, dictDB: Connection, configs: Configs):
             break
     return {"success": True, "total": len(entries), "entries": entries[:page_size]}
 
-@post(siteconfig["rootPath"]+"<dictID>/history.json")
+@post(root_path+"<dictID>/history.json")
 @authDict(["canEdit"])
 def history(dictID: str, dictDB: Connection, user: User, configs: Configs):
     entryID = int(request.forms.id)
     history = ops.readDictHistory(dictDB, dictID, configs, entryID)
     return {"history":history}
 
-@post(siteconfig["rootPath"] + "consent.json")
+@post(root_path + "consent.json")
 @auth
 def save_consent(user: User):
     res = ops.setConsent(user["email"], request.forms.consent)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "login.json")
+@post(root_path + "login.json")
 def check_login():
     email = request.forms.get("email")
     password = request.forms.get("password")
@@ -363,7 +348,7 @@ def check_login():
             return {"success": True, "email": res["email"], "sessionkey": request.cookies.sessionkey, "consent": res["consent"]}
     return {"success": False}
 
-@post(siteconfig["rootPath"] + "logout.json")
+@post(root_path + "logout.json")
 @auth
 def do_logout(user: User):
     ops.logout(user)
@@ -371,55 +356,55 @@ def do_logout(user: User):
     response.delete_cookie("sessionkey", path="/")
     return {"success": False}
 
-@get(siteconfig["rootPath"] + "logout")
+@get(root_path + "logout")
 @auth
 def logout(user: User):
     ops.logout(user)
     if not "Referer" in request.headers:
-        referer = "/"
+        referer = public_path
     elif re.search(r"/logout/$",request.headers["Referer"]):
-        referer = "/"
+        referer = public_path
     else:
         referer = request.headers["Referer"]
     response.delete_cookie("email", path="/")
     response.delete_cookie("sessionkey", path="/")
     return redirect(referer)
 
-@post(siteconfig["rootPath"] + "verifytoken.json")
+@post(root_path + "verifytoken.json")
 def verify_token():
     valid = ops.verifyToken(request.forms.token, request.forms.type)
     return {"success": valid}
 
-@post(siteconfig["rootPath"] + "signup.json")
+@post(root_path + "signup.json")
 def send_signup():
     client_ip = request.environ.get('HTTP_X_FORWARDED_FOR') or request.environ.get('REMOTE_ADDR')
     res = ops.sendSignupToken(request.forms.email, client_ip)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "createaccount.json")
+@post(root_path + "createaccount.json")
 def do_create_account():
     client_ip = request.environ.get('HTTP_X_FORWARDED_FOR') or request.environ.get('REMOTE_ADDR')
     res = ops.createAccount(request.forms.token, request.forms.password, client_ip)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "forgotpwd.json")
+@post(root_path + "forgotpwd.json")
 def forgotpwd():
     client_ip = request.environ.get('HTTP_X_FORWARDED_FOR') or request.environ.get('REMOTE_ADDR')
     res = ops.sendToken(request.forms.email, client_ip)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "recoverpwd.json")
+@post(root_path + "recoverpwd.json")
 def do_recover_pwd():
     client_ip = request.environ.get('HTTP_X_FORWARDED_FOR') or request.environ.get('REMOTE_ADDR')
     res = ops.resetPwd(request.forms.token, request.forms.password, client_ip)
     return {"success": res}
 
-@get(siteconfig["rootPath"] + "makesuggest.json")
+@get(root_path + "makesuggest.json")
 @auth
 def makedict(user: User):
-    return {"baseUrl": siteconfig['baseUrl'], "suggested": ops.suggestDictId()}
+    return {"suggested": ops.suggestDictId()}
 
-@post(siteconfig["rootPath"] + "make.json")
+@post(root_path + "make.json")
 @auth
 def makedictjson(user: User):
     dict_id = request.forms.url
@@ -428,57 +413,57 @@ def makedictjson(user: User):
         return {"success": False}
     return {"success": ops.makeDict(dict_id, template, request.forms.title, "", user["email"]), "url": dict_id}
 
-@post(siteconfig["rootPath"]+"<dictID>/clone.json")
+@post(root_path+"<dictID>/clone.json")
 @authDict(["canConfig"])
 def clonedict(dictID: str, user: User, dictDB: Connection, configs: Configs):
     res = ops.cloneDict(dictID, user["email"])
     res["dicts"] = ops.getDictsByUser(user["email"])
     return res
 
-@post(siteconfig["rootPath"]+"<dictID>/destroy.json")
+@post(root_path+"<dictID>/destroy.json")
 @authDict(["canConfig"])
 def destroydict(dictID: str, user: User, dictDB: Connection, configs: Configs):
     dictDB.close()
     res = ops.destroyDict(dictID)
     return {"success": res, "dicts": ops.getDictsByUser(user["email"])}
 
-@post(siteconfig["rootPath"]+"<dictID>/move.json")
+@post(root_path+"<dictID>/move.json")
 @authDict(["canConfig"])
 def movedict(dictID: str, user: User, dictDB: Connection, configs: Configs):
     res = ops.moveDict(dictID, request.forms.url)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "changepwd.json")
+@post(root_path + "changepwd.json")
 @auth
 def changepwd(user: User):
     res = ops.changePwd(user["email"], request.forms.password)
     return {"success": res}
 
-@post(siteconfig["rootPath"] + "users/userlist.json")
+@post(root_path + "users/userlist.json")
 @authAdmin
 def userelist(user: User):
     res = ops.listUsers(request.forms.searchtext, request.forms.howmany)
     return {"success": True, "entries": res["entries"], "total": res["total"]}
 
-@post(siteconfig["rootPath"] + "users/userupdate.json")
+@post(root_path + "users/userupdate.json")
 @authAdmin
 def userupdate(user: User):
     res = ops.updateUser(request.forms.id, request.forms.content)
     return {"success": True, "id": res["email"], "content": res["xml"]}
 
-@post(siteconfig["rootPath"] + "users/usercreate.json")
+@post(root_path + "users/usercreate.json")
 @authAdmin
 def usercreate(user: User):
     res = ops.createUser(request.forms.content)
     return {"success": True, "id": res["entryID"], "content": res["adjustedXml"]}
 
-@post(siteconfig["rootPath"] + "users/userdelete.json")
+@post(root_path + "users/userdelete.json")
 @authAdmin
 def userdelete(user: User):
     res = ops.deleteUser(request.forms.id)
     return {"success": True, "id": request.forms.id}
 
-@post(siteconfig["rootPath"] + "users/userread.json")
+@post(root_path + "users/userread.json")
 @authAdmin
 def userread(user: User):
     res = ops.readUser(request.forms.id)
@@ -487,13 +472,13 @@ def userread(user: User):
     else:
         return {"success": True, "id": res["email"], "content": res["xml"]}
 
-@post(siteconfig["rootPath"] + "dicts/dictlist.json")
+@post(root_path + "dicts/dictlist.json")
 @authAdmin
 def dictlist(user: User):
     res = ops.listDicts(request.forms.searchtext, request.forms.howmany)
     return {"success": True, "entries": res["entries"], "total": res["total"]}
 
-@post(siteconfig["rootPath"] + "dicts/dictread.json")
+@post(root_path + "dicts/dictread.json")
 @authAdmin
 def dictread(user: User):
     res = ops.readDict(request.forms.id)
@@ -502,7 +487,7 @@ def dictread(user: User):
     else:
         return {"success": True, "id": res["id"], "content": res["xml"]}
 
-@get(siteconfig["rootPath"]+"<dictID>/config.json")
+@get(root_path+"<dictID>/config.json")
 def dictconfig(dictID: str):
     if not ops.dictExists(dictID):
         return {"success": False}
@@ -529,7 +514,7 @@ def dictconfig(dictID: str):
                 },
             }
 
-@get(siteconfig["rootPath"]+"<dictID>/doctype.json")
+@get(root_path+"<dictID>/doctype.json")
 @authDict([])
 def dictconfig(dictID: str, user: User, dictDB: Connection, configs: Configs):
     xema = configs["xema"]
@@ -537,26 +522,26 @@ def dictconfig(dictID: str, user: User, dictDB: Connection, configs: Configs):
     doctypes = [root_tag, *(ops.xema_get_element_name_from_id(xema, key) for key in configs["subbing"])]
     return {"success": True, "doctype": root_tag, "doctypes": list(dict.fromkeys(doctypes)), "userAccess": user["dictAccess"]}
 
-@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>/nabes.json")
+@get(root_path+"<dictID>/<entryID:re:\\d+>/nabes.json")
 @authDict([])
 def publicentrynabes(dictID: str, entryID: int, user: User, dictDB: Connection, configs: Configs):
     nabes = ops.readNabesByEntryID(dictDB, dictID, entryID, configs)
     return {"nabes": nabes}
 
-@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>.xml")
+@get(root_path+"<dictID>/<entryID:re:\\d+>.xml")
 @authDict([], True)
 def publicentryxml(dictID: str, entryID: int, user: User, dictDB: Connection, configs: Configs):
     if not configs["publico"]["public"]:
         return redirect(public_path + dictID)
     if not "licence" in configs["publico"] or not siteconfig["licences"][configs["publico"]["licence"]]["canDownloadXml"]:
         return redirect(public_path + dictID)
-    res = ops.exportEntryXml(dictDB, dictID, entryID, configs, siteconfig["baseUrl"])
+    res = ops.exportEntryXml(dictDB, dictID, entryID, configs, siteconfig["clientUrl"])
     if res["entryID"] == 0:
         return redirect(public_path + dictID)
     response.content_type = "text/xml; charset=utf-8"
     return res["xml"]
 
-@post(siteconfig["rootPath"]+"<dictID>/random.json")
+@post(root_path+"<dictID>/random.json")
 def publicrandom(dictID: str):
     if not ops.dictExists(dictID):
         return redirect(public_path)
@@ -567,12 +552,12 @@ def publicrandom(dictID: str):
         res = ops.readRandoms(dictDB)
         return res
 
-@post(siteconfig["rootPath"]+"<dictID>/randomone.json")
+@post(root_path+"<dictID>/randomone.json")
 @authDict(["canConfig"])
 def randomone(dictID: str, user: User, dictDB: Connection, configs: Configs):
     return ops.readRandomOne(dictDB, configs)
 
-@get(siteconfig["rootPath"]+"<dictID>/download.xml")
+@get(root_path+"<dictID>/download.xml")
 @authDict(["canDownload"], True)
 def downloadxml(dictID: str, user: User, dictDB: Connection, configs: Configs):
     clean = False
@@ -582,7 +567,7 @@ def downloadxml(dictID: str, user: User, dictDB: Connection, configs: Configs):
     response.set_header("Content-Disposition", "attachment; filename="+dictID+".xml")
     return ops.export(dictID, dictDB, configs, clean)
 
-@post(siteconfig["rootPath"]+"<dictID>/upload.html")
+@post(root_path+"<dictID>/upload.html")
 @authDict(["canUpload"])
 def uploadhtml(dictID: str, user: User, dictDB: Connection, configs: Configs):
     import tempfile
@@ -598,7 +583,7 @@ def uploadhtml(dictID: str, user: User, dictDB: Connection, configs: Configs):
     ops.importfile(dictID, filepath, user["email"], purge=request.forms.purge == "on")
     return {"file": filepath, "uploadStart": str(datetime.datetime.utcnow()), "success": True}
 
-@get(siteconfig["rootPath"]+"<dictID>/import.json")
+@get(root_path+"<dictID>/import.json")
 @authDict(["canUpload"])
 def importjson(dictID: str, user: User, dictDB: Connection, configs: Configs):
     uploads = Path(siteconfig["dataDir"]) / "uploads" / ("dictionary-" + dictID)
@@ -616,7 +601,7 @@ def importjson(dictID: str, user: User, dictDB: Connection, configs: Configs):
         return ops.showImportErrors(str(filepath), truncate)
     return ops.getImportStatus(str(filepath))
 
-@post(siteconfig["rootPath"]+"<dictID>/<doctype>/entrylist.json")
+@post(root_path+"<dictID>/<doctype>/entrylist.json")
 @authDict(["canEdit"])
 def entrylist(dictID: str, doctype: str, user: User, dictDB: Connection, configs: Configs):
     if request.forms.id:
@@ -633,7 +618,7 @@ def entrylist(dictID: str, doctype: str, user: User, dictDB: Connection, configs
         entries = ops.readEntries(dictDB, configs, entryIds, xml=False, sortdesc=request.forms.sortdesc)
         return {"success": True, "entries": entries, "total": total}
 
-@post(siteconfig["rootPath"]+"<dictID>/search.json")
+@post(root_path+"<dictID>/search.json")
 @authDict([])
 def publicsearch(dictID: str, user: User, dictDB: Connection, configs: Configs):
     howmany = int(request.forms.howmany or 100)
@@ -646,7 +631,7 @@ def publicsearch(dictID: str, user: User, dictDB: Connection, configs: Configs):
     return {"success": True, "entries": ops.readEntries(dictDB, configs, entry_ids, titlePlain=True), "total": total}
 
 
-@post(siteconfig["rootPath"]+"<dictID>/configread.json")
+@post(root_path+"<dictID>/configread.json")
 @authDict(["canConfig"])
 def configread(dictID: str, user: User, dictDB: Connection, configs: Configs):
     if request.forms.id in ops.RETIRED_DICT_CONFIGS:
@@ -658,7 +643,7 @@ def configread(dictID: str, user: User, dictDB: Connection, configs: Configs):
         config_data['locales'] = ops.get_locales()
     return {"success": True, "id": request.forms.id, "content": config_data}
 
-@post(siteconfig["rootPath"]+"<dictID>/configupdate.json")
+@post(root_path+"<dictID>/configupdate.json")
 @authDict(["canConfig"])
 def configupdate(dictID: str, user: User, dictDB: Connection, configs: Configs):
     if request.forms.id in ops.RETIRED_DICT_CONFIGS:
@@ -669,19 +654,19 @@ def configupdate(dictID: str, user: User, dictDB: Connection, configs: Configs):
         # Resaving the entries is not required here. If needed, entries have been flagged and will be updated as they are used.
     return {"success": True, "id": request.forms.id, "content": adjustedJson}
 
-@post(siteconfig["rootPath"]+"<dictID>/autonumber.json")
+@post(root_path+"<dictID>/autonumber.json")
 @authDict(["canConfig"])
 def autonumber(dictID: str, user: User, dictDB: Connection, configs: Configs):
     return ops.addAutoNumbers(dictDB, configs, user)
 
-@post(siteconfig["rootPath"]+"<dictID>/next_autonumber.json")
+@post(root_path+"<dictID>/next_autonumber.json")
 @authDict(["canConfig"])
 def next_autonumber(dictID: str, user: User, dictDB: Connection, configs: Configs):
     element = request.forms.element
     target = request.forms.get("target")
     return { "next": ops.get_next_autonumber_value(dictDB, element, target) }
 
-@post(siteconfig["rootPath"]+"<dictID>/resave.json")
+@post(root_path+"<dictID>/resave.json")
 @authDict(["canEdit","canConfig","canUpload"])
 def resavejson(dictID: str, user: User, dictDB: Connection, configs: Configs):
     ops.reindex_entries(dictDB)
@@ -692,7 +677,7 @@ def resavejson(dictID: str, user: User, dictDB: Connection, configs: Configs):
         "progressMessage": f"Reindexing - {todo} entries remaining..."
     }
 
-@get(siteconfig["rootPath"]+"publicdicts.json")
+@get(root_path+"publicdicts.json")
 def publicdicts():
     dicts = ops.getPublicDicts()
     user = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
@@ -700,7 +685,7 @@ def publicdicts():
         [dic.update({'isAdmin': True}) for dic in dicts]
     return {"entries": dicts, "success": True}
 
-@get(siteconfig["rootPath"] + "<dictID>/links/add")
+@get(root_path + "<dictID>/links/add")
 @authDict(["canEdit"])
 def linksadd(dictID, user, dictDB, configs):
     source_dict = dictID
@@ -716,18 +701,18 @@ def linksadd(dictID, user, dictDB, configs):
         res = ops.links_add(source_dict, source_el, source_id, target_dict, target_el, target_id, confidence)
         return {"success": True, "links": res}
 
-@get(siteconfig["rootPath"] + "<dictID>/links/delete/<linkID>")
+@get(root_path + "<dictID>/links/delete/<linkID>")
 @authDict(["canEdit"])
 def linksdelete(dictID, linkID, user, dictDB, configs):
     res = ops.links_delete(dictID, linkID)
     return {"success": res}
 
-@get(siteconfig["rootPath"] + "<dictID>/links.json")
+@get(root_path + "<dictID>/links.json")
 @authDict([])
 def linksdict(dictID, user, dictDB, configs):
     return ops.read_dictionary_links(dictID, user)
 
-@get(siteconfig["rootPath"] + "<dictID>/links/from")
+@get(root_path + "<dictID>/links/from")
 @authDict([])
 def linksfrom(dictID, user, dictDB, configs):
     source_el = request.query.source_el
@@ -738,7 +723,7 @@ def linksfrom(dictID, user, dictDB, configs):
     res = ops.links_get(dictID, source_el, source_id, target_dict, target_el, target_id, user)
     return {"links": res}
 
-@get(siteconfig["rootPath"] + "<dictID>/links/to")
+@get(root_path + "<dictID>/links/to")
 @authDict([])
 def linksto(dictID, user, dictDB, configs):
     source_dict = request.query.source_dict
@@ -749,53 +734,53 @@ def linksto(dictID, user, dictDB, configs):
     res = ops.links_get(source_dict, source_el, source_id, dictID, target_el, target_id, user)
     return {"links": res}
 
-@get(siteconfig["rootPath"]+"<dictID>/linkablelist.json")
+@get(root_path+"<dictID>/linkablelist.json")
 @authDict([])
 def linkablelist(dictID, user, dictDB, configs):
     res = ops.getDictLinkables(dictDB)
     return {"links": res}
 
-@get(siteconfig["rootPath"]+"<dictID>/entrylinks.json")
+@get(root_path+"<dictID>/entrylinks.json")
 @authDict([])
 def entrylinks(dictID, user, dictDB, configs):
     res = ops.getEntryLinks(dictDB, dictID, request.query.id, user)
     return {"links": res}
 
-@post(siteconfig["rootPath"] + "changefavdict.json")
+@post(root_path + "changefavdict.json")
 @auth
 def changefavdict(user):
     res = ops.changeFavDict(user['email'], request.forms.dictId, request.forms.status)
     return {"success": res}
 
-@get(siteconfig["rootPath"]+"<dictID>")
+@get(root_path+"<dictID>")
 def publicdict(dictID):
     if ops.dictExists(dictID):
         return redirect(public_path + "#" + dictID)
     else:
         return redirect(public_path)
 
-@get(siteconfig["rootPath"]+"<dictID>/<entryID:re:\\d+>")
+@get(root_path+"<dictID>/<entryID:re:\\d+>")
 def publicentry(dictID, entryID):
     if ops.dictExists(dictID):
         return redirect(public_path + "#" + dictID + '/' + entryID)
     else:
         return redirect(public_path)
 
-@get(siteconfig["rootPath"]+"<dictID>/edit")
+@get(root_path+"<dictID>/edit")
 def dictedit(dictID):
     if ops.dictExists(dictID):
         return redirect(public_path + "#" + dictID + '/edit')
     else:
         return redirect(public_path)
 
-@get(siteconfig["rootPath"]+"<dictID>/edit/<doctype>")
+@get(root_path+"<dictID>/edit/<doctype>")
 def dicteditdoc(dictID, doctype):
     if ops.dictExists(dictID):
         return redirect(public_path + "#" + dictID + '/edit/' + doctype)
     else:
         return redirect(public_path)
 
-@get(siteconfig["rootPath"]+"docs/intro")
+@get(root_path+"docs/intro")
 def docintro():
     return redirect(public_path + "#docs/intro")
 
@@ -805,17 +790,7 @@ def error404(_error):
 
 # deployment
 debug="DEBUG" in os.environ
-if ":" in my_url:
-    host, port = my_url.split(":")
-elif siteconfig.get("port") and siteconfig["port"] > 0:
-    host = my_url
-    port = siteconfig["port"]
-else:
-    host = my_url
-    port = 3000
-if cgi: # we are called as CGI script
-    run(host=host, port=port, debug=debug, server="cgi")
-elif debug:
+if debug:
     run(host=host, port=port, debug=True, reloader=True, interval=0.25)
 else: # run a standalone server, prefer the paste server if available over the builtin one
     try:

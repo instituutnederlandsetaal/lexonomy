@@ -1,7 +1,8 @@
 type Fields = Record<string, string | number | boolean | null | undefined>
 
-const base = new URL('.', document.baseURI)
-export const basePath = base.pathname
+const apiRoot = document.querySelector<HTMLMetaElement>('meta[name="lexonomy-api-root"]')?.content
+if (!apiRoot) throw new Error('Missing Lexonomy API root.')
+const apiBase = new URL(apiRoot, document.baseURI)
 
 export function dictionaryPath(dictId: string, ...segments: string[]) {
    const parts = [dictId, ...segments]
@@ -18,8 +19,8 @@ function formFields(values: Fields) {
 }
 
 function endpointUrl(path: string, query?: Fields) {
-   const url = new URL(path, base)
-   if (url.origin !== base.origin || !url.pathname.startsWith(basePath)) {
+   const url = new URL(path, apiBase)
+   if (url.origin !== apiBase.origin || !url.pathname.startsWith(apiBase.pathname)) {
       throw new Error('API paths must be relative to Lexonomy.')
    }
    for (const [key, value] of formFields(query ?? {})) url.searchParams.append(key, value)

@@ -2,7 +2,6 @@ import { shallowRef } from 'vue'
 import { api } from './api.ts'
 
 type SiteSettings = {
-   baseUrl: string
    setupRequired?: boolean
    consent?: { terms: string | null; confirm: string | null }
    licences: Record<string, { title: string; url: string; icon: string; canDownloadXml: boolean }>

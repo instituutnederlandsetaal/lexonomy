@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from adminscripts.setup_admin import INITIAL_ADMIN, create_initial_admin, pending_code_digest, prepare_admin_setup
-from siteconfig import find_siteconfig
+from siteconfig import find_siteconfig, load_siteconfig
 
 
 class InitialAdminTests(unittest.TestCase):
@@ -91,6 +91,35 @@ class PasswordResetTests(unittest.TestCase):
 
 
 class SiteConfigTests(unittest.TestCase):
+    def test_server_binding_and_public_url_are_independent(self):
+        cases = [
+            ({}, ("0.0.0.0", 8000, "/"), "http://localhost:8000/"),
+            ({"serverUrl": "0.0.0.0:6000/internal", "clientUrl": ""},
+             ("0.0.0.0", 6000, "/internal/"), "http://localhost:6000/internal/"),
+            ({"serverUrl": "some-domain:80/internal"}, ("some-domain", 80, "/internal/"),
+             "http://some-domain/internal/"),
+            ({"serverUrl": "/", "clientUrl": "/public"}, ("0.0.0.0", 8000, "/"),
+             "http://localhost:8000/public/"),
+            ({"serverUrl": "some-domain:6000/some/path/lexonomy",
+              "clientUrl": "http://example.test:80/public"},
+             ("some-domain", 6000, "/some/path/lexonomy/"), "http://example.test/public/"),
+            ({"serverUrl": "/internal", "clientUrl": "https://example.test:443/public"},
+             ("0.0.0.0", 8000, "/internal/"), "https://example.test:443/public/"),
+            ({"clientUrl": "https://example.test/lexonomy"},
+             ("0.0.0.0", 8000, "/"), "https://example.test/lexonomy/"),
+            ({"rootPath": "/internal/", "port": 8081, "baseUrl": "https://example.test/public/"},
+             ("0.0.0.0", 8081, "/internal/"), "https://example.test/public/"),
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "siteconfig.json"
+            with patch("siteconfig.SITECONFIG_PATH", path):
+                for settings, server, client in cases:
+                    with self.subTest(settings=settings):
+                        path.write_text(json.dumps({"dataDir": "data", **settings}), encoding="utf-8")
+                        config = load_siteconfig()
+                        self.assertEqual(config["serverAddress"], server)
+                        self.assertEqual(config["clientUrl"], client)
+
     def test_config_precedence_with_source_and_container_defaults(self):
         with TemporaryDirectory() as directory, patch.dict(os.environ, clear=True):
             root = Path(directory)

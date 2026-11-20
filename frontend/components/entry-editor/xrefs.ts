@@ -3,7 +3,8 @@ import type { Xonomy, XonomyDocSpecExternal } from '@elexis-eu/xonomy'
 import cookies from '../../libs/js.cookie.js'
 import type { WorkspaceConfig } from '../../js/dictionary-workspace.ts'
 import type { MyDictionary } from '../../js/my-dictionaries.ts'
-import { basePath, dictionaryPath } from '../../js/api.ts'
+import { dictionaryPath } from '../../js/api.ts'
+import { pageUrl } from '../../js/page-url.ts'
 import { entryEditorApi, type LinkTarget } from '../../js/entry-editor-api.ts'
 import { xmlElementName, type Xema } from '../../js/xema.ts'
 
@@ -50,7 +51,7 @@ export function createCrossReferenceTools(editor: Xonomy, dictId: string, userDi
       const dictionaries = box.find<HTMLSelectElement>('select')[0]
       const target = box.find<HTMLInputElement>('input')[0]
       const button = box.find('button').prop('disabled', true)
-      const cookiePath = basePath + dictionaryPath(dictId)
+      const cookiePath = pageUrl.pathname + dictionaryPath(dictId)
       const options = box.find<HTMLDataListElement>('datalist')[0]
       const links = new Map<string, LinkTarget>()
       let selected: LinkTarget | undefined

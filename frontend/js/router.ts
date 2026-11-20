@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory, type LocationQuery, type RouteRecordRaw } from 'vue-router'
 import { login, session } from './auth.ts'
 import { dictionaryWorkspace, type EntrySearch } from './dictionary-workspace.ts'
+import { pageUrl } from './page-url.ts'
 import { confirmEntryNavigation, unsavedEntry } from '../components/entry-editor/unsaved.js'
 
 declare module 'vue-router' {
@@ -55,7 +56,7 @@ export function readEntrySearch(query: LocationQuery): EntrySearch {
 }
 
 export const router = createRouter({
-   history: createWebHashHistory(),
+   history: createWebHashHistory(pageUrl.pathname),
    sensitive: true,
    routes: [
       ...accountRoutes,

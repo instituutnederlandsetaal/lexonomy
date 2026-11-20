@@ -28,7 +28,7 @@ COPY api/dictTemplates/ ./dictTemplates/
 COPY api/resources/ ./resources/
 
 EXPOSE 8000
-CMD ["sh", "-c", "python adminscripts/init.py && python adminscripts/updates.py && python migrate.py && exec python lexonomy.py 0.0.0.0:8000"]
+CMD ["sh", "-c", "python adminscripts/init.py && python adminscripts/updates.py && python migrate.py && exec python lexonomy.py"]
 
 FROM backend AS production
 COPY --from=frontend /opt/service/frontend/dist /opt/service/frontend/dist

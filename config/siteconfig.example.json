@@ -1,8 +1,7 @@
 {
   "readonly": false,
-  "baseUrl": "http://localhost:8000/",
-  "rootPath": "/",
-  "port": 8000,
+  "serverUrl": "0.0.0.0:8000/",
+  "clientUrl": "",
   "dataDir": "../data/",
   "dbSchemaFile": "lexonomy.sqlite.schema",
   "dbXrefSchemaFile": "crossref.sqlite.schema",

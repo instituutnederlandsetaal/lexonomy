@@ -22,7 +22,7 @@ export async function fetchPublicDictionaries() {
 }
 
 export function fetchDictionaryUrlSuggestion() {
-   return api.get<{ suggested: string; baseUrl: string }>('makesuggest.json')
+   return api.get<{ suggested: string }>('makesuggest.json')
 }
 
 export type DictionaryTemplate = 'blank' | 'smd' | 'sbd'

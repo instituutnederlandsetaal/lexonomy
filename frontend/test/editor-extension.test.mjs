@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-globalThis.document = { baseURI: 'https://lexonomy.example/workspace/' }
+globalThis.document = {
+   baseURI: 'https://lexonomy.example/workspace/',
+   querySelector: () => ({ content: '/workspace/' })
+}
 const { compileEditorExtension, createEditorExtensionServices, loadEditorExtension, subentryReferenceXml } =
    await import('../js/editor-extension.ts')
 delete globalThis.document

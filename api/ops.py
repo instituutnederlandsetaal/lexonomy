@@ -1524,7 +1524,7 @@ def sendSignupToken(email: str, remoteip: str):
             return False # user already exists, cannot register again
 
     token = secrets.token_hex()
-    tokenurl = siteconfig["baseUrl"] + "#/createaccount/" + token
+    tokenurl = siteconfig["clientUrl"] + "#/createaccount/" + token
     expireDate = datetime.datetime.now() + datetime.timedelta(days=2)
     mailSubject = "Lexonomy signup"
     mailText = "Dear Lexonomy user,\n\n"
@@ -1546,7 +1546,7 @@ def sendToken(email: str, remoteip: str):
             return False # user does not exist, cannot reset password
 
     token = secrets.token_hex()
-    tokenurl = siteconfig["baseUrl"] + "#/recoverpwd/" + token
+    tokenurl = siteconfig["clientUrl"] + "#/recoverpwd/" + token
     expireDate = datetime.datetime.now() + datetime.timedelta(days=2)
     mailSubject = "Lexonomy password reset"
     mailText = "Dear Lexonomy user,\n\n"
@@ -1587,7 +1587,7 @@ def createAccount(token: str, password: str, remoteip: str):
                 if siteconfig.get('notifyRegister') == True:
                     mailSubject = "Lexonomy, new user registered"
                     mailText = "Hi,\n\n"
-                    mailText += "new user registered to Lexonomy at " + siteconfig["baseUrl"] + " :\n\n"
+                    mailText += "new user registered to Lexonomy at " + siteconfig["clientUrl"] + " :\n\n"
                     mailText += "  " + row["email"]
                     mailText += "\n\nYours,\nThe Lexonomy team"
                     for adminMail in siteconfig["admins"]:
@@ -2623,7 +2623,7 @@ def notifyUsers(configOld: ConfigUsers, configNew: ConfigUsers, dictInfo: Config
             if configNew[user]['canUpload']:
                 mailText += " * upload\n"
             mailText += "\nYou can access the dictionary at the following address:\n"
-            mailText += siteconfig['baseUrl'] + "#/" + dictID
+            mailText += siteconfig["clientUrl"] + "#/" + dictID
             mailText += "\n\nYours,\nThe Lexonomy team"
             try:
                 sendmail(user, mailSubject, mailText)

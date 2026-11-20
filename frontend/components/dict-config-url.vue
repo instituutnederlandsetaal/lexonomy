@@ -49,11 +49,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { basePath } from '../js/api.ts'
+import { ref, watch } from 'vue'
+import { pageUrl } from '../js/page-url.ts'
 import { moveDictionary } from '../js/dictionary-config-api.ts'
 import { loadMyDictionaries } from '../js/my-dictionaries.ts'
-import { siteSettings } from '../js/site-settings.ts'
 import { useDictionaryScope } from '../js/use-dictionary-setting.ts'
 import Materialize from '../libs/materialize/materialize.min.js'
 import DictConfigButtons from './dict-config-buttons.vue'
@@ -67,7 +66,7 @@ const newUrl = ref('')
 const movedUrl = ref('')
 const moveResult = ref<boolean | null>(null)
 const saving = ref(false)
-const baseUrl = computed(() => siteSettings.value?.baseUrl || location.origin + basePath)
+const baseUrl = new URL('#/', pageUrl).href
 watch(scope, () => {
    newUrl.value = ''
    movedUrl.value = ''

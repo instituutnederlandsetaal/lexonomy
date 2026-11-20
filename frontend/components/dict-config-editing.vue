@@ -151,7 +151,7 @@
 </template>
 
 <script setup lang="ts">
-import { basePath } from '../js/api.ts'
+import { pageUrl } from '../js/page-url.ts'
 import { compileEditorExtension } from '../js/editor-extension.ts'
 import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
@@ -164,7 +164,7 @@ const props = defineProps<{ dictId: string }>()
 const defaults: DictionarySettings['editing'] = {
    xonomyMode: 'nerd', xonomyTextEditor: 'askString', editorApiVersion: null, _js: '', _css: ''
 }
-const extensionDocs = basePath + 'docs/editor-extensions.md'
+const extensionDocs = new URL('docs/editor-extensions.md', pageUrl).href
 const draft = ref({ ...defaults })
 const override = ref(false)
 const { loading, ready, saving, load, save } = useDictionarySetting(() => props.dictId, 'editing', content => {

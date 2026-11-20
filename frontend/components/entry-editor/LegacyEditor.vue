@@ -9,7 +9,7 @@ import cookies from '../../libs/js.cookie.js'
 import '../../node_modules/@elexis-eu/xonomy/dist/xonomy.css'
 import { Xonomy as XonomyClass, type XonomyDocSpec, type XonomyDocSpecExternal } from '@elexis-eu/xonomy'
 import * as XonomyExports from '@elexis-eu/xonomy'
-import { basePath } from '../../js/api.ts'
+import { api } from '../../js/api.ts'
 import type { WorkspaceConfig } from '../../js/dictionary-workspace.ts'
 import type { EntryDraft, EntryRevision } from '../../js/entry-editor-api.ts'
 import { crossReferenceHref } from '../../js/entry-search.ts'
@@ -73,13 +73,14 @@ onMounted(() => {
    const xrefs = createCrossReferenceTools(editor, props.dictId, props.userDicts, linking, emit)
    editor.buttonClass = 'btn'
    editor.lang = 'en'
-   Object.assign(editor, { baseUrl: basePath })
+   const apiRoot = api.url('').pathname
+   Object.assign(editor, { baseUrl: apiRoot })
 
    const customSource = editing.editorApiVersion == null ? editing._js : undefined
    if (customSource || xema._xonomyDocSpec) {
       // Older stored scripts and document specifications access these names on window.
       setGlobals({
-         jQuery: jquery, Cookies: cookies, XonomyExports, API_URL: basePath,
+         jQuery: jquery, Cookies: cookies, XonomyExports, API_URL: apiRoot,
          Xonomy: editor, Sub: subentries, Xrefs: xrefs,
          Xemplatron: {
             ...Xemplatron,

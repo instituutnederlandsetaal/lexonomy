@@ -42,7 +42,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { basePath } from '../js/api.ts'
+import { pageUrl } from '../js/page-url.ts'
 import { createDictionary, fetchDictionaryUrlSuggestion, type DictionaryTemplate } from '../js/public-dictionary-api.ts'
 import { loadMyDictionaries } from '../js/my-dictionaries.ts'
 import FormSelect from './FormSelect.vue'
@@ -53,7 +53,7 @@ const loading = ref(true)
 const errorMessage = ref('')
 const url = ref('')
 const title = ref('')
-const baseUrl = ref(location.origin + basePath)
+const baseUrl = new URL('#/', pageUrl).href
 const template = ref<DictionaryTemplate>('blank')
 const templates: { value: DictionaryTemplate; label: string }[] = [
    { value: 'blank', label: '(none)' },
@@ -65,7 +65,6 @@ onMounted(async () => {
    try {
       const suggestion = await fetchDictionaryUrlSuggestion()
       if (!url.value) url.value = suggestion.suggested
-      baseUrl.value = suggestion.baseUrl
    } catch {
       errorMessage.value = 'Could not suggest a dictionary URL. You can enter one yourself.'
    } finally {

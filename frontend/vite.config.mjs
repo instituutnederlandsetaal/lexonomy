@@ -2,8 +2,6 @@ import { execFileSync } from 'node:child_process'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig, loadEnv } from 'vite'
 
-const backendPaths = String.raw`^/(?:[^?]+\.(?:json|xml)|[^/?]+/(?:upload\.html|subget/?|links/(?:add|delete/[^/?]+|from|to))|docs/intro|[a-zA-Z0-9_-]+(?:/(?:[0-9]+|edit(?:/[^/?]+)?))?|version\.txt)(?:\?|$)`
-
 export default defineConfig(({ command, mode }) => {
    const config = {
       base: command === 'build' ? './' : '/',
@@ -31,16 +29,23 @@ export default defineConfig(({ command, mode }) => {
       throw new Error('LEXONOMY_BACKEND_URL must be an HTTP(S) URL with an optional path.')
    }
    const prefix = target.pathname.replace(/\/+$/, '')
+   const apiRoot = '/__lexonomy_api__/'
+   config.plugins.push({
+      name: 'lexonomy-api-root',
+      transformIndexHtml: () => [{
+         tag: 'meta', attrs: { name: 'lexonomy-api-root', content: apiRoot }
+      }]
+   })
 
    config.server = {
       strictPort: true,
       proxy: {
-         [backendPaths]: {
+         [apiRoot]: {
             target: target.origin,
             changeOrigin: true,
             cookieDomainRewrite: '',
             cookiePathRewrite: '/',
-            rewrite: path => prefix + path,
+            rewrite: path => path.replace(apiRoot, () => prefix + '/'),
             configure(proxy) {
                proxy.on('proxyRes', (response, request) => {
                   const location = response.headers.location

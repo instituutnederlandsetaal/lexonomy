@@ -33,9 +33,9 @@ class ReleaseTests(unittest.TestCase):
         git("commit", "--allow-empty", "-m", "Previous project release")
         previous = git("rev-parse", "HEAD")
         git("tag", "int-v1.1.3")
-        git("commit", "--allow-empty", "-m", "Add editor", "-m", "Support custom editors.")
+        git("commit", "--allow-empty", "-m", "Add editor", "-m", "Support custom editors and café entries.")
         git("tag", "2.0.0-rc.1")
-        editor = shlex.join([sys.executable, "-c",
+        editor = shlex.join([Path(sys.executable).as_posix(), "-c",
                              "import sys; open(sys.argv[1], 'a').write('\\n- Edited release notes\\n')"])
         with TemporaryDirectory() as remote:
             git("init", "--bare", remote)
@@ -54,9 +54,9 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(git("rev-parse", "2.0.0"), git("rev-parse", "origin/main"))
                 self.assertEqual(git("rev-parse", "2.0.0"), git("rev-parse", "origin/develop"))
                 self.assertEqual(git("rev-parse", "origin/maintenance/1"), previous)
-                notes = Path("releases/2.0.0.md").read_text()
+                notes = Path("releases/2.0.0.md").read_text(encoding="utf-8")
                 self.assertIn("## Improvements", notes)
-                self.assertIn("Support custom editors.", notes)
+                self.assertIn("Support custom editors and café entries.", notes)
                 self.assertIn("Edited release notes", notes)
                 self.assertNotIn("Previous project release", notes)
 
@@ -81,7 +81,7 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(git("rev-parse", "2.0.1"), upstream)
 
     def test_build_uses_tagged_files_and_metadata(self):
-        message = 'Add "quoted" XML\n\n<entry/> & $(nothing)'
+        message = 'Add "quoted" XML for café\n\n<entry/> & $(nothing)'
         Path("app.txt").write_text("tagged content")
         git("add", "app.txt")
         git("commit", "-m", message)
@@ -109,3 +109,11 @@ class ReleaseTests(unittest.TestCase):
             build("2.4.6-rc.1", push=False)
             with self.assertRaises(SystemExit):
                 build("v2.4.6", push=False)
+
+    def test_repo_help_lists_commands_and_release_options(self):
+        scripts = Path(__file__).resolve().parent
+        help_text = subprocess.check_output([sys.executable, scripts, "-h"], text=True)
+        for command in ("dev", "check", "release", "build-docker"):
+            self.assertIn(command, help_text)
+        release_help = subprocess.check_output([sys.executable, scripts, "release", "-h"], text=True)
+        self.assertIn("--push", release_help)

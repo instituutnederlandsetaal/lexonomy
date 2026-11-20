@@ -6,8 +6,9 @@ import shlex
 import shutil
 import subprocess
 import sys
-from tempfile import TemporaryDirectory, mkdtemp
+from tempfile import mkdtemp
 
+from checks import run_checks
 from version import VERSION
 
 
@@ -19,7 +20,7 @@ LEGACY_TAG = "int-v1.1.3"
 
 
 def git(*args):
-    return subprocess.check_output(["git", *args], text=True).strip()
+    return subprocess.check_output(["git", *args], encoding="utf-8").strip()
 
 
 def ref(name):
@@ -67,37 +68,18 @@ def last_release(head, branch):
     return None, (0, 0, 0)
 
 
-def run_checks():
-    if not shutil.which("uv"):
-        raise SystemExit("Install uv to run the release checks. https://docs.astral.sh/uv/getting-started/installation/")
-    subprocess.run(["npm", "run", "typecheck"], cwd="frontend", check=True)
-    with TemporaryDirectory(prefix="lexonomy-checks-") as venv:
-        subprocess.run(["uv", "venv", "--python", "3.12", venv], check=True)
-        python = str(Path(venv) / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
-        subprocess.run(["uv", "pip", "install", "--python", python,
-                        "-r", "api/requirements.txt", "ruff==0.17.5"], check=True)
-        subprocess.run([python, "-m", "ruff", "check", "--select", "E9,F63,F7,F82",
-                        "api", "scripts"], check=True)
-        subprocess.run(["npm", "test"], cwd="frontend", check=True)
-        for test in sorted(Path("api").glob("test-*.py")):
-            subprocess.run([python, test.name], cwd="api", check=True)
-        tests = subprocess.run([python, "-m", "unittest", "discover", "-s", "scripts"],
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        if tests.returncode:
-            print(tests.stdout, end="", file=sys.stderr)
-            tests.check_returncode()
-        print("Release script tests passed.", flush=True)
-
-
 def edit_notes(version, previous_tag, head, branch):
     editor = os.environ.get("GIT_EDITOR") or subprocess.run(
         ["git", "config", "--get", "core.editor"],
         capture_output=True, text=True, check=False,
     ).stdout.strip() or os.environ.get("VISUAL") or os.environ.get("EDITOR")
-    command = shlex.split(editor or ("code --wait" if shutil.which("code") else git("var", "GIT_EDITOR")))
-    if Path(command[0]).name in {"code", "code-insiders"} and not {"-w", "--wait"}.intersection(command):
-        command.append("--wait")
-    commits = git("log", "--reverse", "--format=- %s (%h)%n%w(0,2,2)%b", head,
+    editor = editor or ("code --wait" if shutil.which("code") else git("var", "GIT_EDITOR"))
+    command = shlex.split(editor)
+    if command and Path(command[0]).stem.lower() in {"code", "code-insiders"} and not (
+        {"-w", "--wait"}.intersection(command)
+    ):
+        editor += " --wait"
+    commits = git("log", "--encoding=UTF-8", "--reverse", "--format=- %s (%h)%n%w(0,2,2)%b", head,
                   *([f"^refs/tags/{previous_tag}"] if previous_tag else []))
     notes_path = Path("releases") / f"{version}.md"
     draft = Path(mkdtemp(prefix="lexonomy-release-")) / notes_path.name
@@ -105,7 +87,9 @@ def edit_notes(version, previous_tag, head, branch):
                      f"## Improvements\n\n## Miscellaneous\n\n## Commits to sort\n\n{commits}\n",
                      encoding="utf-8")
     try:
-        subprocess.run([*command, str(draft)], check=True)
+        # Let Git launch its configured editor, including shell commands and Windows shims.
+        subprocess.run(["git", "config", "--file", str(draft), "--edit"],
+                       env={**os.environ, "GIT_EDITOR": editor}, check=True)
         notes = draft.read_text(encoding="utf-8")
         if not notes.strip():
             raise SystemExit("The release notes are empty.")
@@ -186,8 +170,8 @@ def release(push):
 
     run_checks()
     notes = edit_notes(version, previous_tag, head, branch)
-    for command in (["git", "add", "--", str(notes)],
-                    ["git", "commit", "-m", f"Release {version}", "--", str(notes)]):
+    for command in (["git", "add", "--", notes.as_posix()],
+                    ["git", "commit", "-m", f"Release {version}", "--", notes.as_posix()]):
         subprocess.run(command, check=True)
         commands.append(command)
     commit = git("rev-parse", "HEAD")
@@ -199,8 +183,8 @@ def release(push):
         updates.append(f"update refs/heads/{MAIN} {commit} {main}")
         branches_to_push.append(f"refs/heads/{MAIN}")
     update_command = ["git", "update-ref", "-m", f"Release {version}", "--stdin"]
-    subprocess.run(update_command,
-                   input="\n".join(updates) + "\n", text=True, check=True)
+    # update-ref requires LF, which subprocess text mode converts to CRLF on Windows.
+    subprocess.run(update_command, input=("\n".join(updates) + "\n").encode("utf-8"), check=True)
     commands.append(update_command)
 
     push_command = ["git", "push", "--atomic", "--no-follow-tags", "origin", *branches_to_push, tag]
@@ -220,14 +204,23 @@ def release(push):
         print("\n".join(summary), flush=True)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare a stable Lexonomy release.")
+def add_arguments(parser):
     parser.add_argument("--push", action="store_true", help="Push the release refs atomically to origin.")
-    args = parser.parse_args()
-    os.chdir(Path(__file__).resolve().parents[1])
+    parser.set_defaults(run=run_release)
+
+
+def run_release(args):
     try:
         release(args.push)
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"Release stopped after {shlex.join(error.cmd)} failed.") from None
     except (EOFError, KeyboardInterrupt):
         raise SystemExit("Release interrupted.") from None
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Prepare a stable Lexonomy release.")
+    add_arguments(parser)
+    args = parser.parse_args()
+    os.chdir(Path(__file__).resolve().parents[1])
+    args.run(args)

@@ -104,10 +104,11 @@ any.
 
 Start with a clean checkout that has the full Git history and tags. See
 [Release setup](#release-setup) if this is your first release.
+Run `python scripts -h` to list the repository commands.
 
 ```sh
 git switch develop
-python scripts/release.py --push
+python scripts release --push
 ```
 
 Choose patch, minor, or major. After the checks pass, edit the release notes,
@@ -117,15 +118,19 @@ tagged commit and publishes `x.y.z`, `x.y`, and `x` to Docker Hub.
 
 ### Release setup
 
-- **Local.** Install the frontend and API dependencies, activate the API virtual
-  environment, and run `python -m pip install ruff`. [Source setup](INSTALL.md#install-from-source)
+- **Local.** Install Python 3.12, Node.js 22.12 or newer, and
+  [uv](https://docs.astral.sh/uv/getting-started/installation/). Run
+  `python scripts install-frontend` once and `python scripts check` to run the
+  release checks independently. On Windows, start Docker with Linux containers
+  for the API tests. On other platforms, install the ICU build prerequisites
+  listed in [source setup](INSTALL.md#install-from-source).
 - **GitHub.** Set the repository variable `DOCKERHUB_IMAGE` to `namespace/repository`.
   Add your username as `DOCKERHUB_USERNAME` and a token with write access as
   `DOCKERHUB_TOKEN`. Save both as GitHub secrets.
 
 ### Other release tasks
 
-- **Prepare locally.** Run `python scripts/release.py`. To publish later, run
+- **Prepare locally.** Run `python scripts release`. To publish later, run
   the push command it prints.
 - **Maintain an older major.** A major release creates `maintenance/<major>` at
   the previous major's last stable tag. Run the release script on that branch
@@ -139,7 +144,7 @@ tagged commit and publishes `x.y.z`, `x.y`, and `x` to Docker Hub.
   ```
 
 - **Build a Docker image locally.** With Docker Buildx and the Git tag available,
-  run `python scripts/build_docker.py 2.0.0-rc.1`. To publish from your machine,
+  run `python scripts build-docker 2.0.0-rc.1`. To publish from your machine,
   run `docker login`, set `DOCKERHUB_IMAGE`, and add `--push` to the build command.
 
 

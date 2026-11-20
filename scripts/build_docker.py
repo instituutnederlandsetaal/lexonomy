@@ -21,7 +21,9 @@ def build(version, push):
     revision = subprocess.check_output(
         ["git", "rev-parse", "--verify", f"refs/tags/{version}^{{commit}}"], text=True,
     ).strip()
-    message = subprocess.check_output(["git", "show", "-s", "--format=%B", revision], text=True).rstrip("\n")
+    message = subprocess.check_output(
+        ["git", "show", "-s", "--encoding=UTF-8", "--format=%B", revision], encoding="utf-8",
+    ).rstrip("\n")
     tags = [version]
     if not match[4]:
         tags.extend((f"{match[1]}.{match[2]}", match[1]))
@@ -38,13 +40,22 @@ def build(version, push):
         subprocess.run([*command, "-"], stdin=context, env={**os.environ, "GIT_MESSAGE": message}, check=True)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Build the Docker image for a Lexonomy Git tag.")
+def add_arguments(parser):
     parser.add_argument("tag", help="A local x.y.z Git tag, optionally with a suffix.")
     parser.add_argument("--push", action="store_true", help="Publish the image to Docker Hub.")
-    args = parser.parse_args()
-    os.chdir(Path(__file__).resolve().parents[1])
+    parser.set_defaults(run=run_build)
+
+
+def run_build(args):
     try:
         build(args.tag, args.push)
     except subprocess.CalledProcessError as error:
         raise SystemExit(f"Docker release stopped after {error.cmd[0]} failed.") from None
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Build the Docker image for a Lexonomy Git tag.")
+    add_arguments(parser)
+    args = parser.parse_args()
+    os.chdir(Path(__file__).resolve().parents[1])
+    args.run(args)

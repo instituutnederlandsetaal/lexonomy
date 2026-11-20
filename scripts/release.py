@@ -81,7 +81,12 @@ def run_checks():
         subprocess.run(["npm", "test"], cwd="frontend", check=True)
         for test in sorted(Path("api").glob("test-*.py")):
             subprocess.run([python, test.name], cwd="api", check=True)
-        subprocess.run([python, "-m", "unittest", "discover", "-s", "scripts"], check=True)
+        tests = subprocess.run([python, "-m", "unittest", "discover", "-s", "scripts"],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if tests.returncode:
+            print(tests.stdout, end="", file=sys.stderr)
+            tests.check_returncode()
+        print("Release script tests passed.", flush=True)
 
 
 def edit_notes(version, previous_tag, head, branch):
@@ -126,8 +131,11 @@ def release(push):
     branch = git("symbolic-ref", "--short", "HEAD")
     if branch != DEV and not branch.startswith(MAINTENANCE):
         raise SystemExit(f"Run on {DEV} or {MAINTENANCE}<major>.")
+    commands = []
     if push:
-        subprocess.run(["git", "fetch", "--tags", "origin"], check=True)
+        fetch_command = ["git", "fetch", "--tags", "origin"]
+        subprocess.run(fetch_command, check=True)
+        commands.append(fetch_command)
     head = git("rev-parse", "HEAD")
     main = ref(f"refs/heads/{MAIN}")
     if branch == DEV:
@@ -178,8 +186,10 @@ def release(push):
 
     run_checks()
     notes = edit_notes(version, previous_tag, head, branch)
-    subprocess.run(["git", "add", "--", str(notes)], check=True)
-    subprocess.run(["git", "commit", "-m", f"Release {version}", "--", str(notes)], check=True)
+    for command in (["git", "add", "--", str(notes)],
+                    ["git", "commit", "-m", f"Release {version}", "--", str(notes)]):
+        subprocess.run(command, check=True)
+        commands.append(command)
     commit = git("rev-parse", "HEAD")
     if git("rev-parse", "HEAD^") != head or git("symbolic-ref", "--short", "HEAD") != branch:
         raise SystemExit("The release branch changed before committing the release notes.")
@@ -188,14 +198,26 @@ def release(push):
         require_main_available()
         updates.append(f"update refs/heads/{MAIN} {commit} {main}")
         branches_to_push.append(f"refs/heads/{MAIN}")
-    subprocess.run(["git", "update-ref", "-m", f"Release {version}", "--stdin"],
+    update_command = ["git", "update-ref", "-m", f"Release {version}", "--stdin"]
+    subprocess.run(update_command,
                    input="\n".join(updates) + "\n", text=True, check=True)
+    commands.append(update_command)
 
     push_command = ["git", "push", "--atomic", "--no-follow-tags", "origin", *branches_to_push, tag]
-    print(f"Created {version} with notes at {notes}.", flush=True)
-    print(shlex.join(push_command), flush=True)
-    if push:
-        subprocess.run(push_command, check=True)
+    pushed = False
+    try:
+        if push:
+            print(f"Pushing release {version} to origin.\n{shlex.join(push_command)}", flush=True)
+            subprocess.run(push_command, check=True)
+            commands.append(push_command)
+            pushed = True
+    finally:
+        status = "pushed to origin" if pushed else "prepared locally"
+        summary = [f"\nRelease {version} {status}.", f"Release notes saved to {notes}.",
+                   "", "Git commands completed", *(f"  {shlex.join(command)}" for command in commands)]
+        if not pushed:
+            summary.extend(("", "To push the release branches and tag, run", shlex.join(push_command)))
+        print("\n".join(summary), flush=True)
 
 
 if __name__ == "__main__":

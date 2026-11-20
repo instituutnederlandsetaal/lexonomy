@@ -1,4 +1,5 @@
-from contextlib import chdir
+from contextlib import chdir, redirect_stdout
+from io import StringIO
 import os
 from pathlib import Path
 import shlex
@@ -42,8 +43,13 @@ class ReleaseTests(unittest.TestCase):
             git("push", "origin", "main")
 
             with patch("release.run_checks"), patch.dict(os.environ, {"GIT_EDITOR": editor}):
-                with patch("builtins.input", return_value="major"):
+                summary = StringIO()
+                with patch("builtins.input", return_value="major"), redirect_stdout(summary):
                     release(push=True)
+                self.assertIn("Release 2.0.0 pushed to origin.", summary.getvalue())
+                self.assertTrue(summary.getvalue().strip().endswith(
+                    "git push --atomic --no-follow-tags origin refs/heads/develop "
+                    "refs/heads/maintenance/1 refs/heads/main refs/tags/2.0.0"))
                 self.assertEqual(git("rev-parse", "main"), git("rev-parse", "develop"))
                 self.assertEqual(git("rev-parse", "2.0.0"), git("rev-parse", "origin/main"))
                 self.assertEqual(git("rev-parse", "2.0.0"), git("rev-parse", "origin/develop"))
@@ -61,8 +67,16 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(git("rev-parse", "main"), git("rev-parse", "2.0.0"))
 
                 git("switch", "develop")
-                with patch("builtins.input", return_value="patch"):
-                    release(push=True)
+                summary = StringIO()
+                with patch("builtins.input", return_value="patch"), redirect_stdout(summary):
+                    release(push=False)
+                self.assertEqual(git("rev-parse", "origin/main"), git("rev-parse", "2.0.0"))
+                self.assertIn("Release 2.0.2 prepared locally.", summary.getvalue())
+                completed, publish = summary.getvalue().split("To push the release branches and tag, run\n")
+                self.assertNotIn("git push", completed)
+                self.assertEqual(publish.strip(), "git push --atomic --no-follow-tags origin "
+                                 "refs/heads/develop refs/heads/main refs/tags/2.0.2")
+                git(*shlex.split(publish)[1:])
                 self.assertEqual(git("rev-parse", "2.0.2"), git("rev-parse", "origin/main"))
                 self.assertEqual(git("rev-parse", "2.0.1"), upstream)
 

@@ -1173,12 +1173,12 @@ try:
         ops.updateDictConfig(db, "duplicate-import", "xema", xema)
         ops.updateDictConfig(db, "duplicate-import", "subbing", {"idiom": {}})
 
-        def load_duplicates(source, *, conflict=False):
+        def load_duplicates(source, *, conflict=False, entry_id=31479):
             document = f'<dict xmlns:lxnm="http://www.lexonomy.eu/">{source}</dict>'.encode()
             try:
                 ops.import_dictionary(db, document, "test@lexonomy", lambda *_: None, purge_history=True)
             except ValueError as error:
-                assert conflict and str(error) == "Conflicting definitions for entry 31479 in the same XML document."
+                assert conflict and str(error) == f"Conflicting definitions for entry {entry_id} in the same XML document."
             else:
                 assert not conflict, source
 
@@ -1230,6 +1230,28 @@ try:
                         + "</section></section>" + compact, conflict=True)
         load_duplicates(duplicate('<form xml:space="preserve"><hi/> <hi/></form>')
                         + duplicate('<form xml:space="preserve"><hi/><hi/></form>'), conflict=True)
+
+        # nl-gr.xml: the standalone idiom precedes its differently indented copy under geest.
+        idiom = ('<entry lxnm:id="65631" xml:id="65631" subentry="true" type="relatedEntry">\n'
+                 '  <form type="phrase"><orth>de geest geven</orth></form>\n'
+                 '  <sense><cit><form><orth>ξεψυχώ</orth></form></cit></sense>\n'
+                 '</entry>')
+        xema["elements"]["entry"]["children"] = [{"name": "entry_idiom"}]
+        xema["elements"].update({
+            "entry_idiom": {"elementName": "entry", "filling": "chd", "children": [{"name": "form_idiom"}]},
+            "form_idiom": {"elementName": "form", "filling": "chd", "children": [{"name": "orth"}]},
+            "orth": {"filling": "txt"},
+        })
+        ops.updateDictConfig(db, "duplicate-import", "xema", xema)
+        ops.updateDictConfig(db, "duplicate-import", "subbing", {"entry_idiom": {"attributes": {"subentry": "true"}}})
+        nested = parent(idiom.replace("\n", "\n  "))
+        idiom = idiom.replace("<entry ", '<entry xmlns:lxnm="http://www.lexonomy.eu/" ')
+        for source in (idiom + nested, nested + idiom):
+            load_duplicates(source, entry_id=65631)
+            stored = ops.parse(db.execute("select xml from entries where id=65631").fetchone()[0])
+            assert stored["lxnm:definition"] == "entry_idiom"
+            assert tuple(db.execute("select parent_id, child_id from sub").fetchone()) == (1, 65631)
+        load_duplicates(idiom + nested.replace("de geest geven", "de  geest geven"), conflict=True, entry_id=65631)
 
         ops.updateDictConfig(db, "duplicate-import", "xema", {"root": "", "elements": {}})
         ops.updateDictConfig(db, "duplicate-import", "subbing", {})

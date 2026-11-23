@@ -850,14 +850,14 @@ def get_entry_id(xml: Tag, dictDB: Connection, maybeID: Optional[int] = None) ->
         del xml.attrs["lxnm:entryID"]
     return id, isNewEntry
 
-def is_subentry(config: ConfigSubbing, el: Tag, element_id: str) -> bool:
+def is_subentry(config: ConfigSubbing, el: Tag | dict[str, str], element_id: str) -> bool:
     """Match the resolved schema definition and an optional attribute rule."""
     rule = config.get(element_id)
     if rule is None:
         return False
     required_attributes = rule.get("attributes") or {}
     return not required_attributes or any(
-        el.has_attr(name) and (not value or el.attrs.get(name) == value)
+        el.get(name) is not None and (not value or el.get(name) == value)
         for name, value in required_attributes.items()
     )
 
@@ -1492,8 +1492,12 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
     # Specific order: reserve ID in the database, then extract subentries
     # So that any element matching after this does not go into subentries
     doctype = get_entry_doctype(xml)
-    definition_id = xema_element_id or entry_schema_id(configs, xml)
     id, isNewEntry = get_entry_id(xml, dictDB, id)
+    if importing is not None and not xema_element_id and XEMA_DEFINITION_ATTRIBUTE not in xml.attrs:
+        alias = importing.aliases.get(id)
+        if alias and xema_get_element_name_from_id(configs["xema"], alias) == doctype:
+            xema_element_id = alias
+    definition_id = xema_element_id or entry_schema_id(configs, xml)
     old_xml = None
     old_entry = None
     if not isNewEntry and not xema_element_id and XEMA_DEFINITION_ATTRIBUTE not in xml.attrs:
@@ -2083,18 +2087,38 @@ def import_dictionary(dictDB: Connection, data: bytes, email: str,
                       progress: Callable[[int, int], None], *, purge_entries=False,
                       purge_history=False, filename="") -> int:
     """Store the entry graph and its XML layout in the same transaction."""
-    def get_entry_tag(configs):
+    def scan(configs):
         xema = configs["xema"]
         root = xema.get("root")
-        return xema_get_element_name_from_id(xema, root) if root else ""
+        entry_tag = xema_get_element_name_from_id(xema, root) if root else ""
+        aliased_tags = {name for key in configs["subbing"] if (name := xema_get_element_name_from_id(xema, key)) != key}
+        aliases = {}
 
-    entry_tag = get_entry_tag(readDictConfigs(dictDB))
-    document = read_document(data, entry_tag)
+        def remember_alias(path, name, attrs, identifier):
+            # A detached copy has no parent path to distinguish e.g. entry_idiom from entry.
+            if name not in aliased_tags:
+                return
+            root_name, root_attrs = path[0]
+            definition = schema_id_for_tag(configs, root_name, root_attrs.get(XEMA_DEFINITION_ATTRIBUTE))
+            for ancestor, _ in path[1:]:
+                definition = xema_get_id_from_element_name(xema, ancestor, definition)
+            definition = xema_get_id_from_element_name(xema, name, definition)
+            if definition != name and is_subentry(configs["subbing"], attrs, definition):
+                try:
+                    aliases[int(identifier)] = definition
+                except ValueError:
+                    pass  # Not a shared record ID; the importer will allocate one.
+
+        document = read_document(data, entry_tag, on_nested_id=remember_alias if aliased_tags else None)
+        return document, ImportEntries(archival=document.archive_offset is not None, aliases=aliases)
+
+    initial = readDictConfigs(dictDB)
+    document, state = scan(initial)
     with dictDB:
         dictDB.execute("begin immediate")
         configs = readDictConfigs(dictDB)
-        if (current_tag := get_entry_tag(configs)) != entry_tag:
-            document = read_document(data, current_tag)
+        if configs["xema"] != initial["xema"] or configs["subbing"] != initial["subbing"]:
+            document, state = scan(configs)
         if not document.entries:
             raise ValueError("The XML file contains no matching entries. The existing dictionary was kept.")
         if purge_entries or purge_history:
@@ -2129,7 +2153,6 @@ def import_dictionary(dictDB: Connection, data: bytes, email: str,
             dictDB.execute("update sqlite_sequence set seq=max(seq, ?) where name='entries'",
                            (document.max_entry_id,))
 
-        state = ImportEntries(archival=document.archive_offset is not None)
         start = document.prolog_end
         if appended:
             prolog = document.prolog(max(document.declaration_end, 3 if data.startswith(b"\xef\xbb\xbf") else 0))
@@ -2173,7 +2196,7 @@ def save_imported_record(dictDB: Connection, configs: Configs, state: ImportEntr
         stored_id = node.get(f"{{{LXNM}}}id")
         if ((stored_id is None or (stored_id.isascii() and stored_id.isdigit() and len(stored_id) <= 19
                                   and 0 < int(stored_id) < 2**63 - 1
-                                  and int(stored_id) not in state.defined))
+                                  and int(stored_id) not in state.defined and int(stored_id) not in state.aliases))
                 and (state.archival or not requires_xml_transform(configs, node))):
             entry_id = int(stored_id) if stored_id is not None else None
             is_new = True

@@ -49,6 +49,8 @@ class ImportEntries:
     # Entry ID -> whether the stored definition had a preserving ancestor outside its XML.
     defined: dict[int, bool] = field(default_factory=dict)
     deferred: set[int] = field(default_factory=set)
+    # Contextual schema IDs of nested definitions, for standalone copies in the same import.
+    aliases: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -87,8 +89,12 @@ class Document:
         return before + self.markup(self.archive_offset + len(ARCHIVE_PI), self.prolog_end)
 
 
-def read_document(data: bytes, entry_tag: str) -> Document:
-    """Validate the source document and find its outermost editable entry spans."""
+EntryPath = list[tuple[str, dict[str, str]]]
+
+
+def read_document(data: bytes, entry_tag: str, *,
+                  on_nested_id: Callable[[EntryPath, str, dict[str, str], str], None] | None = None) -> Document:
+    """Locate editable entry spans, optionally reporting identified descendants of non-archive entries."""
     document = Document(data)
     parser = ParserCreate("utf-8")
     depth = 0
@@ -98,6 +104,7 @@ def read_document(data: bytes, entry_tag: str) -> Document:
     root_empty = False
     doctype_start = 0
     scopes = [({}, False)]
+    entry_path: EntryPath = []
 
     def start(name, attrs):
         nonlocal depth, active_depth, active, empty, root_empty, entry_tag
@@ -113,6 +120,10 @@ def read_document(data: bytes, entry_tag: str) -> Document:
         if identifier and len(identifier) <= 19 and identifier.isascii() and identifier.isdigit():
             document.max_entry_id = max(document.max_entry_id, min(int(identifier), 2**63 - 1))
         if active is not None:
+            if entry_path:
+                if identifier and on_nested_id:
+                    on_nested_id(entry_path, name, attrs, identifier)
+                entry_path.append((name, attrs))
             return
         scope, inherited_preserve = scopes[-1]
         declared = {key: value for key, value in attrs.items() if key == "xmlns" or key.startswith("xmlns:")}
@@ -127,11 +138,15 @@ def read_document(data: bytes, entry_tag: str) -> Document:
             active = EntrySlot(pos, inherited={key: value for key, value in scope.items() if key not in declared},
                                inherited_preserve=inherited_preserve)
             active_depth = depth
+            if on_nested_id and document.archive_offset is None:
+                entry_path.append((name, attrs))
             empty = data[opening.end() - 2:opening.end()] == b"/>"
             document.standalone_entry = depth == 1
 
     def end(name):
         nonlocal depth, active
+        if entry_path:
+            entry_path.pop()
         if active is not None and depth != active_depth:
             depth -= 1
             return

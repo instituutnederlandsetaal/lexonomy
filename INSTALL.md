@@ -120,6 +120,18 @@ Docker Compose publishes port 8000 by default. If you change the listen port in 
 
 When upgrading, move the old `baseUrl` value to `clientUrl` and put the backend's bind host, port and old `rootPath` into `serverUrl`. Until you do, Lexonomy reads the old fields as fallbacks. Move any bind address previously passed on the command line into `serverUrl`.
 
+### Login over HTTP
+
+For an HTTP-only staging site, list the browser-facing HTTP origin of the API in `siteconfig.json`.
+
+```jsonc
+"allowHttpLoginOn": ["http://lexonomy.home:8000"]
+```
+
+Use the scheme and hostname, plus the port if it differs from 80. Leave out the path, even if `apiUrl` includes one. The default is an empty array. Listed HTTP origins use staging cookies with `SameSite=Lax` and no `Secure` flag. Passwords and session cookies travel unencrypted over HTTP.
+
+If you use a reverse proxy, preserve the browser-facing `Host` header, including any port, and have the proxy overwrite `X-Forwarded-Proto` with the original scheme. Lexonomy uses that header to keep `Secure` cookies on HTTPS requests when the proxy connects to the backend over HTTP. Keep the backend port private behind the proxy.
+
 ### Data directory
 
 ```js

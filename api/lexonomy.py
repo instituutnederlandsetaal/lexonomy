@@ -4,7 +4,7 @@ import os
 from contextlib import closing
 from html import escape
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 from sqlite3 import Connection
 import functools
 from typing import Any, TYPE_CHECKING
@@ -19,6 +19,7 @@ from bottle import (HTTPResponse, hook, get, post, run, error, request,
 
 from ops import Configs, User
 from adminscripts.setup_admin import create_initial_admin, pending_code_digest
+from siteconfig import parse_http_origin
 
 if TYPE_CHECKING:
     request: Any
@@ -70,9 +71,41 @@ if root_path != "/":
 def strip_path():
     if request.path != root_path:
         request.environ["PATH_INFO"] = request.environ["PATH_INFO"].rstrip("/")
-    from urllib.parse import unquote
     for c in request.cookies:
         request.cookies[c] = unquote(request.cookies[c])
+
+
+def allow_http_login():
+    allowed_origins = siteconfig["allowHttpLoginOn"]
+    if not allowed_origins or request.environ["wsgi.url_scheme"] != "http":
+        return False
+    # A proxy can veto the exception. Forwarded headers never supply the matching host.
+    if request.headers.get("X-Forwarded-Proto", "http") != "http":
+        return False
+    try:
+        origin = parse_http_origin("http://" + request.headers.get("Host", ""))
+    except ValueError:
+        return False
+    return origin in allowed_origins
+
+
+def session_cookie_policy():
+    if allow_http_login():
+        # Keep existing Secure cookies from blocking the HTTP session on the same host.
+        return ("email-http", "sessionkey-http"), {"path": "/", "samesite": "lax"}
+    return ("email", "sessionkey"), {"path": "/", "samesite": "none", "secure": True}
+
+
+def session_credentials():
+    (email_cookie, session_key_cookie), _ = session_cookie_policy()
+    return request.cookies.get(email_cookie, ""), request.cookies.get(session_key_cookie, "")
+
+
+def clear_session_cookies():
+    names, options = session_cookie_policy()
+    for name in names:
+        response.delete_cookie(name, **options)
+
 
 # profiler
 def profiler(callback):
@@ -125,7 +158,7 @@ def authDict(checkRights: list[str], errorRedirect: bool=False):
                 abort(404, "No such dictionary")
             is_generator = False
             try:
-                res, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, conn)
+                res, configs = ops.verifyLoginAndDictAccess(*session_credentials(), conn)
                 if not checkRights and res["dictAccess"] is False and not configs["publico"]["public"]:
                     if errorRedirect:
                         redirect(public_path)
@@ -169,7 +202,7 @@ def auth(func: Any):
     """
     @functools.wraps(func)
     def wrapper_verifyLogin(*args, **kwargs):
-        res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
+        res = ops.verifyLogin(*session_credentials())
         if not res["loggedin"]:
             redirect(public_path)
         kwargs["user"] = res
@@ -182,7 +215,7 @@ def auth(func: Any):
 def authAdmin(func: Any):
     @functools.wraps(func)
     def wrapper_verifyLoginAdmin(*args, **kwargs):
-        res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
+        res = ops.verifyLogin(*session_credentials())
         if not res["loggedin"] or not res["isAdmin"]:
             redirect(public_path)
         kwargs["user"] = res
@@ -336,24 +369,23 @@ def check_login():
     if email is not None or password is not None:
         res = ops.login(email, password) if email and password else {"success": False}
         if res["success"]:
-            #response.set_cookie("email", res["email"], path="/")
-            #response.set_cookie("sessionkey", res["key"], path="/")
-            response.add_header('Set-Cookie', "email=\""+res["email"]+"\"; Path=/; SameSite=None; Secure")
-            response.add_header('Set-Cookie', "sessionkey="+res["key"]+"; Path=/; SameSite=None; Secure")
+            (email_cookie, session_key_cookie), options = session_cookie_policy()
+            response.set_cookie(email_cookie, quote(res["email"], safe="@+"), **options)
+            response.set_cookie(session_key_cookie, res["key"], **options)
             return {"success": True, "email": res["email"], "sessionkey": res["key"], "consent": res["consent"]}
         return {"success": False}
-    if request.cookies.email != "" and request.cookies.sessionkey != "":
-        res = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
+    email, session_key = session_credentials()
+    if email and session_key:
+        res = ops.verifyLogin(email, session_key)
         if res["loggedin"]:
-            return {"success": True, "email": res["email"], "sessionkey": request.cookies.sessionkey, "consent": res["consent"]}
+            return {"success": True, "email": res["email"], "sessionkey": session_key, "consent": res["consent"]}
     return {"success": False}
 
 @post(root_path + "logout.json")
 @auth
 def do_logout(user: User):
     ops.logout(user)
-    response.delete_cookie("email", path="/")
-    response.delete_cookie("sessionkey", path="/")
+    clear_session_cookies()
     return {"success": False}
 
 @get(root_path + "logout")
@@ -366,8 +398,7 @@ def logout(user: User):
         referer = public_path
     else:
         referer = request.headers["Referer"]
-    response.delete_cookie("email", path="/")
-    response.delete_cookie("sessionkey", path="/")
+    clear_session_cookies()
     return redirect(referer)
 
 @post(root_path + "verifytoken.json")
@@ -493,7 +524,7 @@ def dictconfig(dictID: str):
         return {"success": False}
     else:
         with ops.getDB(dictID) as dictDB:
-            user, configs = ops.verifyLoginAndDictAccess(request.cookies.email, request.cookies.sessionkey, dictDB)
+            user, configs = ops.verifyLoginAndDictAccess(*session_credentials(), dictDB)
             if user["dictAccess"] is False and not configs["publico"]["public"]:
                 return {"success": False}
             xema = configs["xema"]
@@ -680,7 +711,7 @@ def resavejson(dictID: str, user: User, dictDB: Connection, configs: Configs):
 @get(root_path+"publicdicts.json")
 def publicdicts():
     dicts = ops.getPublicDicts()
-    user = ops.verifyLogin(request.cookies.email, request.cookies.sessionkey)
+    user = ops.verifyLogin(*session_credentials())
     if user["loggedin"] and user["isAdmin"]:
         [dic.update({'isAdmin': True}) for dic in dicts]
     return {"entries": dicts, "success": True}

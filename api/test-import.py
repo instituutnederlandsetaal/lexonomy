@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import inspect
 from contextlib import closing
+from http.cookies import SimpleCookie
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import re
+from runpy import run_path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -13,7 +16,9 @@ from time import monotonic, sleep
 import traceback
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypedDict, Union
 from unittest.mock import patch
+from wsgiref.util import setup_testing_defaults
 
+import bottle
 from bs4 import Tag
 from siteconfig import read_siteconfig
 
@@ -82,7 +87,7 @@ class Test(TypedDict):
 test_directory = TemporaryDirectory(prefix="lexonomy-import-")
 test_config_path = Path(test_directory.name) / "siteconfig.json"
 test_config = read_siteconfig(Path("../config/siteconfig.example.json"))
-test_config.update(dataDir=test_directory.name, admins=[])
+test_config.update(dataDir=test_directory.name, admins=[], allowHttpLoginOn=["http://staging.lexonomy.test:8080"])
 test_config_path.write_text(json.dumps(test_config), encoding="utf-8")
 os.environ["LEXONOMY_SITECONFIG"] = str(test_config_path)
 subprocess.run([sys.executable, "adminscripts/init.py"], check=True)
@@ -981,6 +986,63 @@ try:
         permissions, _ = ops.verifyLoginAndDictAccess("Mixed@Example.org", credentials["key"], login_db)
         assert permissions["canEdit"]
     print("PASS Mixed-case email logs in and retains dictionary permissions")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
+    auth_app = bottle.default_app.push()
+    try:
+        with patch("bottle.run"):
+            run_path("lexonomy.py")
+    finally:
+        bottle.default_app.pop()
+
+    def auth_request(path="/login.json", *, host="staging.lexonomy.test:8080", scheme="http",
+                     method="POST", login=False, cookies="", **headers):
+        data = b"email=mixed%40example.org&password=test" if login else b""
+        environ = {
+            "PATH_INFO": path, "REQUEST_METHOD": method, "HTTP_HOST": host, "wsgi.url_scheme": scheme,
+            "CONTENT_TYPE": "application/x-www-form-urlencoded", "CONTENT_LENGTH": str(len(data)),
+            "wsgi.input": BytesIO(data), "HTTP_COOKIE": cookies, **headers,
+        }
+        setup_testing_defaults(environ)
+        response_cookies = SimpleCookie()
+
+        def start_response(status, response_headers, exc_info=None):
+            for name, value in response_headers:
+                if name.lower() == "set-cookie":
+                    response_cookies.load(value)
+
+        body = b"".join(auth_app(environ, start_response))
+        return json.loads(body) if path != "/logout" else None, response_cookies
+
+    with patch.dict(ops.siteconfig, {"allowHttpLoginOn": set()}):
+        body, cookies = auth_request(login=True)
+        assert body["success"] and cookies["sessionkey"]["secure"]
+
+    for request_options in (
+        {"host": "staging.lexonomy.test"},
+        {"host": "other.lexonomy.test:8080", "HTTP_X_FORWARDED_HOST": "staging.lexonomy.test:8080"},
+        {"scheme": "https", "HTTP_X_FORWARDED_PROTO": "http"},
+        {"HTTP_X_FORWARDED_PROTO": "https"},
+    ):
+        body, cookies = auth_request(login=True, **request_options)
+        assert body["success"] and set(cookies) == {"email", "sessionkey"}
+        assert all(cookie["secure"] and cookie["samesite"].lower() == "none" for cookie in cookies.values())
+
+    for logout_path, method in (("/logout.json", "POST"), ("/logout", "GET")):
+        body, cookies = auth_request(login=True, HTTP_X_FORWARDED_PROTO="http")
+        assert body["success"] and set(cookies) == {"email-http", "sessionkey-http"}
+        assert all(not cookie["secure"] and cookie["samesite"].lower() == "lax" for cookie in cookies.values())
+        cookie_header = "; ".join(f"{cookie.key}={cookie.coded_value}" for cookie in cookies.values())
+        assert auth_request(cookies=cookie_header)[0]["success"]
+        assert not auth_request(cookies=cookie_header, HTTP_X_FORWARDED_PROTO="https")[0]["success"]
+        _, expired = auth_request(logout_path, method=method, cookies=cookie_header)
+        assert set(expired) == set(cookies)
+        assert all(int(cookie["max-age"]) <= 0 and cookie["path"] == "/" for cookie in expired.values())
+        assert not auth_request(cookies=cookie_header)[0]["success"]
+    print("PASS HTTP login cookies are limited to allowlisted origins")
 except Exception:
     failures += 1
     traceback.print_exc()

@@ -57,6 +57,18 @@ def read_siteconfig(path):
     return json.loads(_JSONC_TOKEN.sub(replace_comment, path.read_text(encoding="utf-8")))
 
 
+def parse_http_origin(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"http://(?:[a-z0-9._-]+|\[[0-9a-f:.]+\])(?::[0-9]+)?", value, re.IGNORECASE | re.ASCII
+    ):
+        raise ValueError(f"Expected an HTTP origin such as http://lexonomy.home:8000, got {value!r}")
+    url = urlsplit(value)
+    port = url.port
+    if port == 0:
+        raise ValueError("HTTP origin port must be positive")
+    return url.hostname, port or 80
+
+
 def load_siteconfig():
     config = read_siteconfig(SITECONFIG_PATH)
     config["dataDir"] = str((API_DIR / config["dataDir"]).resolve())
@@ -88,4 +100,9 @@ def load_siteconfig():
         config["apiUrl"] = urlsplit(api_url)._replace(path=api_path).geturl()
     else:
         config["apiUrl"] = config["clientUrl"]
+
+    http_login_origins = config.get("allowHttpLoginOn", [])
+    if not isinstance(http_login_origins, list):
+        raise ValueError("allowHttpLoginOn must be an array of HTTP origins")
+    config["allowHttpLoginOn"] = {parse_http_origin(origin) for origin in http_login_origins}
     return config

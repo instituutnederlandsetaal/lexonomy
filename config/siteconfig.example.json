@@ -6,6 +6,8 @@
   "clientUrl": "",
   // Browser API address. Use a path such as "/lexonomy/" for same-origin requests, or leave blank to use clientUrl.
   "apiUrl": "",
+  // Allow login over plain HTTP on these exact origins, e.g. ["http://lexonomy.home:8000"].
+  "allowHttpLoginOn": [],
   "dataDir": "../data/",
   "dbSchemaFile": "lexonomy.sqlite.schema",
   "dbXrefSchemaFile": "crossref.sqlite.schema",

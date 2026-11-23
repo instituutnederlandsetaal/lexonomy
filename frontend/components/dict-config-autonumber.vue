@@ -2,101 +2,119 @@
 <div class="dict-config-autonumber">
    <LoadingOverlay v-if="loading || saving || busy"/>
    <DictNav :links="[['config', 'Configure'], ['config-autonumber', 'Auto-numbering']]"/>
-   <h1>Auto-numbering of elements</h1>
-   <div v-if="ready" :inert="saving || busy">
-      <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || busy">
-         <button type="button" class="btn waves-effect waves-light" @click="addNumbers" :disabled="saving || busy || !Object.keys(draft).length">
-            <i class="material-symbols-outlined right">add</i>Save &amp; autonumber
+   <h1>Auto-numbering</h1>
+   <div :inert="saving || busy">
+      <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="!ready || saving || busy">
+         <button type="button" class="btn waves-effect waves-light" @click="addNumbers"
+            :disabled="!ready || saving || busy || !Object.keys(draft).length">
+            Save &amp; autonumber
+            <i class="material-symbols-outlined right">add</i>
          </button>
       </DictConfigButtons>
-      <div class="row">
-         <p>If you need to number some of entry elements automatically, Lexonomy can do that for you. First, go to Entry structure and add element/attribute where you want to store the number. Eg. in element <code>sense</code> add attribute <code>number</code>. When you're ready, select element to number (eg. <code>sense</code>) and element/attribute to store the number (eg. <code>@number</code>). Lexonomy will fill the numbers where missing.</p>
-      </div>
-      <hr>
-      <template v-for="config in Object.values(draft)" :key="config.element">
-         <div class="row">
-            <div class="input-field col s4">
-               <FormSelect :model-value="config.element" :options="[option(config.element), ...availableElements]"
-                  aria-label="Element to number" @update:model-value="changeElement(config, $event)"/>
-            </div>
-            <!-- child/attribute selection -->
-            <div class="input-field col s4">
-               <FormSelect v-model="config.target" :options="targetOptions(config)" aria-label="Add numbers to"/>
-            </div>
-            <div class="input-field col s4">
-               <button type="button" class="btn waves-effect waves-light" @click="deleteElement(config.element)" style="height:3rem;">Remove</button>
+      <div v-if="ready" class="config-form">
+         <p>Choose an element to number and where to store the value. For example, add a <code>number</code> attribute to <code>sense</code> in Entry structure, then select <code>sense</code> and <code>@number</code> below.</p>
+
+         <section v-for="config in Object.values(draft)" :key="config.element">
+            <div class="config-section-heading">
+               <h2>{{ config.element }}</h2>
+               <button type="button" class="btn btn-flat" :aria-label="'Remove numbering for ' + config.element"
+                  @click="deleteElement(config.element)"><i class="material-symbols-outlined">delete</i></button>
             </div>
 
-            <div class="col s12">
-               <label>
-                  <input :name="(config.element) + ('_autoApply')" type="radio" class="with-gap" value="false" :checked="config.auto_apply" @change="config.auto_apply = true"/>
-                  <span>Apply numbers automatically</span>
-               </label>
-               <br>
-               <label>
-                  <input :name="(config.element) + ('_autoApply')" type="radio" class="with-gap" value="true" :checked="!config.auto_apply" @change="config.auto_apply = false"/>
-                  <span>Only run numbering manually</span>
-               </label>
-            </div>
-
-            <h3 class="col s12" style="margin-top: 2rem;">What to do with existing values</h3>
-            <div class="col s12" style="padding-left: 2.75rem;">
-               <label>
-                  <input :name="(config.element) + ('_existingValues')" type="radio" class="with-gap" value="false" :checked="!config.overwrite_existing" @change="config.overwrite_existing = false"/>
-                  <span><b>Keep</b> existing values</span>
-               </label>
-               <br>
-               <label>
-                  <input :name="(config.element) + ('_existingValues')" type="radio" class="with-gap" value="true" :checked="config.overwrite_existing" @change="config.overwrite_existing = true"/>
-                  <span><b>Overwrite</b> existing values</span>
-               </label>
-            </div>
-
-            <h3 class="col s12" style="margin-top: 2rem;">New values</h3>
-            <div class="col s12" style="padding-left: 2.75rem;">
-               <label>
-                  <input :name="(config.element) + ('_newValues')" type="radio" class="with-gap" value="number" :checked="config.type == 'number'" @change="config.type = 'number'" />
-                  <span>Use numbers</span>
-               </label>
-               <br>
-
-               <label style="margin-left: 3rem; margin-top: 0.75rem;">
-                  <input :name="(config.element) + ('_useNumbers')" type="radio" class="with-gap" :disabled="config.type !== 'number'" :checked="!config.number_globally" @change="config.number_globally = false"/>
-                  <span>Start at 0 in every entry</span>
-               </label>
-               <div style="margin-left: 3rem; display: flex; flex-wrap: wrap; align-items: baseline;">
-                  <label style="white-space: nowrap;">
-                     <input style="margin-left: 0.75rem;" :name="(config.element) + ('_useNumbers')" type="radio" class="with-gap" :disabled="config.type !== 'number'" :checked="config.number_globally" @change="config.number_globally = true"/>
-                     <span>Keep counting up, starting from</span>
-                  </label>
-                  <input type="number" aria-label="First number" :disabled="config.type !== 'number' || !config.number_globally"
-                     style="margin-left: 0.75rem; flex-basis: 5ch; flex-grow: 1;" :value="config.number_next" @change="setNextNumber(config, $event)"/>
-                  <button type="button" class="btn waves-effect waves-light" style="height: 3rem; flex-shrink: 0; margin-left: 0.75rem;" @click="findNext(config)" :disabled="config.type !== 'number' || !config.number_globally || busy || saving">Find next number</button>
+            <div class="numbering-settings">
+               <div class="config-fields">
+                  <div class="config-field">
+                     <label :for="'number-element-' + config.element">Element to number</label>
+                     <FormSelect :id="'number-element-' + config.element" :model-value="config.element"
+                        :options="[option(config.element), ...availableElements]" @update:model-value="changeElement(config, $event)"/>
+                  </div>
+                  <div class="config-field">
+                     <label :for="'number-target-' + config.element">Store values in</label>
+                     <FormSelect :id="'number-target-' + config.element" v-model="config.target" :options="targetOptions(config)"/>
+                  </div>
                </div>
 
-               <label>
-                  <input :name="(config.element) + ('_newValues')" type="radio" class="with-gap" :checked="config.type == 'string'" @change="config.type = 'string'"/>
-                  <span>Use text</span>
-               </label>
+               <div class="config-fields">
+                  <fieldset class="numbering-options">
+                     <legend>When to apply</legend>
+                     <label>
+                        <input :name="'number-apply-' + config.element" type="radio" class="with-gap"
+                           :checked="config.auto_apply" @change="config.auto_apply = true"/>
+                        <span>Automatically when saving an entry</span>
+                     </label>
+                     <label>
+                        <input :name="'number-apply-' + config.element" type="radio" class="with-gap"
+                           :checked="!config.auto_apply" @change="config.auto_apply = false"/>
+                        <span>Only when run manually</span>
+                     </label>
+                  </fieldset>
 
-               <input style="margin-left: 3rem;" :disabled="config.type !== 'string'" type="text" placeholder="%(headword)-%(pos)" v-model="config.string_template" aria-label="Text to generate"/>
+                  <fieldset class="numbering-options">
+                     <legend>Existing values</legend>
+                     <label>
+                        <input :name="'number-overwrite-' + config.element" type="radio" class="with-gap"
+                           :checked="!config.overwrite_existing" @change="config.overwrite_existing = false"/>
+                        <span>Keep existing values</span>
+                     </label>
+                     <label>
+                        <input :name="'number-overwrite-' + config.element" type="radio" class="with-gap"
+                           :checked="config.overwrite_existing" @change="config.overwrite_existing = true"/>
+                        <span>Overwrite existing values</span>
+                     </label>
+                  </fieldset>
+               </div>
+
+               <fieldset class="numbering-options inline-options">
+                  <legend>New values</legend>
+                  <label>
+                     <input :name="'number-type-' + config.element" type="radio" class="with-gap" value="number" v-model="config.type"/>
+                     <span>Use numbers</span>
+                  </label>
+                  <label>
+                     <input :name="'number-type-' + config.element" type="radio" class="with-gap" value="string" v-model="config.type"/>
+                     <span>Use text</span>
+                  </label>
+               </fieldset>
+
+               <fieldset v-if="config.type === 'number'" class="numbering-options inline-options">
+                  <legend>Counting</legend>
+                  <label>
+                     <input :name="'number-scope-' + config.element" type="radio" class="with-gap"
+                        :checked="!config.number_globally" @change="config.number_globally = false"/>
+                     <span>Start at 0 in each entry</span>
+                  </label>
+                  <label>
+                     <input :name="'number-scope-' + config.element" type="radio" class="with-gap"
+                        :checked="config.number_globally" @change="config.number_globally = true"/>
+                     <span>Count across entries</span>
+                  </label>
+               </fieldset>
+
+               <div v-if="config.type === 'number' && config.number_globally" class="config-field next-number">
+                  <label :for="'number-next-' + config.element">Next number</label>
+                  <div class="config-control-row">
+                     <input :id="'number-next-' + config.element" type="number" :value="config.number_next"
+                        @change="setNextNumber(config, $event)"/>
+                     <button type="button" class="btn waves-effect waves-light" @click="findNext(config)"
+                        :disabled="busy || saving">Find next number</button>
+                  </div>
+               </div>
+               <div v-if="config.type === 'string'" class="config-field">
+                  <label :for="'number-template-' + config.element">Text template</label>
+                  <input :id="'number-template-' + config.element" type="text" v-model="config.string_template" placeholder="%(headword)-%(pos)"/>
+               </div>
             </div>
+         </section>
 
+         <div v-if="availableElements.length" class="config-field">
+            <label for="newElement">New numbering rule</label>
+            <div class="config-control-row">
+               <FormSelect id="newElement" v-model="newElement" :options="availableElements" placeholder="Choose an element"/>
+               <button type="button" class="btn waves-effect waves-light" @click="addElement" :disabled="!newElement || busy || saving">Add rule</button>
+            </div>
          </div>
-         <hr>
-      </template>
 
-      <div v-if="availableElements.length">
-         <FormSelect id="newElement" v-model="newElement" :options="availableElements"
-            aria-label="Add auto-numbering to another element" placeholder="Choose an element"/>
-         <button type="button" class="btn waves-effect waves-light" @click="addElement" :disabled="!newElement || busy || saving">Add</button>
-      </div>
-
-      <div v-if="info"
-            class="section">
-         <div class="message messageInfo">
-            {{ info }}
-         </div>
+         <div v-if="info" class="message messageInfo" role="status">{{ info }}</div>
       </div>
    </div>
    <p v-if="!loading && !ready">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
@@ -112,6 +130,7 @@ import { computed, ref, watch } from 'vue'
 import { activeDictionary } from '../js/dictionary-workspace.ts'
 import { applyAutonumbering, findNextNumber, type DictionarySettings } from '../js/dictionary-config-api.ts'
 import FormSelect from './FormSelect.vue'
+import '../css/dict-config-form.css'
 
 type Numbering = DictionarySettings['autonumbering'][string]
 const props = defineProps<{ dictId: string }>()
@@ -219,3 +238,43 @@ async function addNumbers() {
    }
 }
 </script>
+
+<style scoped>
+.dict-config-buttons {
+   flex-wrap: wrap;
+}
+.numbering-settings {
+   display: grid;
+   gap: .85rem;
+}
+.numbering-options {
+   min-width: 0;
+   border: 0;
+   margin: 0;
+   padding: 0;
+}
+.numbering-options legend {
+   color: #004494;
+   font-size: .9rem;
+   text-transform: uppercase;
+   padding: 0;
+}
+.numbering-options label {
+   display: block;
+}
+.numbering-options label > span {
+   height: auto;
+   min-height: 25px;
+   text-transform: none;
+}
+.inline-options > label {
+   display: inline-block;
+   margin-right: 1rem;
+}
+.next-number .config-control-row {
+   flex-wrap: wrap;
+}
+.next-number input {
+   flex: 0 1 7rem;
+}
+</style>

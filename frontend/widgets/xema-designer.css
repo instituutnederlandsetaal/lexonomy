@@ -37,24 +37,65 @@
 
 #editor.designer .warn { background-image: url(/assets/furniture/exclamation.png); background-repeat: no-repeat; background-position: left center; padding-left: 25px; color: #333333; margin-top: 10px; }
 
-#editor.designer .list { padding: 15px 0px; border-right: 1px solid #1e6bcf; }
-#editor.designer .list .element { cursor: pointer; padding: 5px 5px; margin: 0px 15px 0px 25px; position: relative;}
-#editor.designer .list .element.root { }
-#editor.designer .list .attribute { cursor: pointer; padding: 5px 5px; margin: 0px 15px 0px 25px; position: relative; }
-#editor.designer .list .clickable:hover { background-color: #f7f9ea; text-shadow: 1px 1px 0px #ffffff; }
-#editor.designer .list .clickable.current { background-color: rgb(153, 212, 255); border-radius: 2px; text-shadow: 1px 1px 0px #dddddd;}
-#editor.designer .list .children {margin-left: 10px; padding-left: 5px; border-left: 1px dotted #cccccc; margin-top: -14px; padding-top: 14px;}
-#editor.designer .list .container { position: relative; margin: 0px 0px 0px 10px; }
-#editor.designer .list .horizontal { position: absolute; top: 15px; left: -15px; width: 50px; border-top: 1px dotted #cccccc;}
-#editor.designer .list .children > .blinder { position: absolute; left: 5px; width: 10px; bottom: 0px; background-color: #ffffff; top: 100px;}
-#editor.designer .list .title:not(.container) { margin: 20px 0px 10px 15px; }
-#editor.designer .list .title:not(.container) span { background-color: #eeeeee; padding: 7px 10px; color: #666666; text-shadow: 1px 1px 0px #ffffff; }
-
-#editor.designer .list .container > .horizontal .plusminus {display: none;}
-#editor.designer .list .container.hasChildren > .horizontal .plusminus { display: block; background-image: url(/assets/furniture/minus.gif); width: 18px; height: 18px; background-position: center center; background-repeat: no-repeat; position: absolute; top: -9px; left: 17px; cursor: pointer; }
-#editor.designer .list .container.hasChildren > .horizontal .plusminus:hover { background-color: #f7f9ea; }
-#editor.designer .list .container.hasChildren.collapsed > .horizontal .plusminus { background-image: url(/assets/furniture/plus.gif); }
-#editor.designer .list .container.hasChildren.collapsed > .children {display: none;}
+#editor.designer .list {
+   --tree-indent: 26px;
+   --tree-row-height: 30px;
+   --tree-toggle-size: 20px;
+   --tree-branch-offset: calc(var(--tree-toggle-size) / 2 - var(--tree-indent));
+   padding: 10px;
+   border-right: 1px solid #1e6bcf;
+}
+#editor.designer .tree-node, #editor.designer .tree-node > .children { position: relative; }
+#editor.designer .tree-node > .children { margin-left: var(--tree-indent); }
+#editor.designer .tree-node > .children::before,
+#editor.designer .children > .tree-node::before,
+#editor.designer .children > .tree-node::after {
+   content: "";
+   position: absolute;
+   left: var(--tree-branch-offset);
+   pointer-events: none;
+   border-color: #b7c3ce;
+   border-style: dotted;
+   border-width: 0 0 0 1px;
+}
+#editor.designer .tree-node > .children::before { top: calc(var(--tree-row-height) / -2); bottom: 100%; }
+#editor.designer .children > .tree-node::before { top: 0; bottom: 0; }
+#editor.designer .children > .tree-node:last-child::before { bottom: auto; height: calc(var(--tree-row-height) / 2); }
+#editor.designer .children > .tree-node::after {
+   top: calc(var(--tree-row-height) / 2);
+   width: calc(var(--tree-indent) + var(--tree-toggle-size) / 2);
+   border-width: 1px 0 0;
+}
+#editor.designer .tree-node > button {
+   position: relative;
+   border: 0;
+   background-color: transparent;
+}
+#editor.designer .tree-node > .clickable {
+   display: inline-flex;
+   align-items: center;
+   min-height: var(--tree-row-height);
+   margin: 0 0 0 var(--tree-toggle-size);
+   padding: 0 5px;
+   vertical-align: top;
+   white-space: nowrap;
+}
+#editor.designer .tree-node > button:hover { background-color: #f7f9ea; }
+#editor.designer .tree-node > .clickable.current { background-color: rgb(153, 212, 255); border-radius: 2px; }
+#editor.designer .tree-node > .plusminus {
+   position: absolute;
+   z-index: 1;
+   top: calc((var(--tree-row-height) - var(--tree-toggle-size)) / 2);
+   left: 0;
+   width: var(--tree-toggle-size);
+   height: var(--tree-toggle-size);
+   min-height: 0;
+   margin: 0;
+   padding: 0;
+   background-position: center;
+   background-image: url(/assets/furniture/minus.gif);
+}
+#editor.designer .tree-node > .plusminus[aria-expanded="false"] { background-image: url(/assets/furniture/plus.gif); }
 
 #editor.designer .details { padding: 5px 0px; }
 #editor.designer .details .block { margin: 10px 15px; padding: 5px 0px 5px 0px;}
@@ -71,8 +112,6 @@
 #editor.designer table tr td .tech:hover { background-color: #f7f9ea; padding: 5px; margin: 0px -5px 0px 0px; }
 #editor.designer table tr td input.textbox {width: 2em; padding: 4px 5px 4px 5px; text-align: center; color: #033f8a; }
 #editor.designer table tr td button {padding: 3px 5px 3px 35px; margin-top: 1px; text-align: center; color: #033f8a; }
-#editor.designer input.textbox.val { font-family: monospace; font-size: 1rem; color: #0268cb; width: 8em; text-align: left; padding: 5px 10px 6px 10px;}
-#editor.designer input.textbox.cap { color: #666666; width: 30em; text-align: left; padding: 7px 10px 8px 10px; }
 
 #editor.designer table tr:first-child td button.iconArrowUp { visibility: hidden;}
 #editor.designer table tr:last-child td button.iconArrowDown { visibility: hidden;}

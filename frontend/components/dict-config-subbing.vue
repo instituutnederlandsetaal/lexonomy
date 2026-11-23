@@ -3,56 +3,53 @@
    <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-subbing', 'Subentries']]"/>
    <h1>Subentries</h1>
-   <template v-if="ready">
-      <DictConfigButtons :dict-id="dictId" :save-data="() => save(draft)" :disabled="saving"/>
-
-      <div v-for="element in activeSubentries" :key="element.id" class="element-info" :class="{ 'text-red': !element.valid }">
-         <div class="header">
-            <h5>{{ element.name }} {{ element.valid ? '' : '(unknown element)' }}</h5>
-            <button type="button" class="btn btn-small red lighten-1" :aria-label="`Remove ${element.name} from subentries`"
-               style="margin-right: 15px;" @click="delete draft[element.id]"><i class="material-symbols-outlined">delete</i></button>
+   <DictConfigButtons :dict-id="dictId" :save-data="() => save(draft)" :disabled="saving || !ready"/>
+   <div v-if="ready" class="config-form">
+      <p>Elements configured as subentries can be shared by multiple entries.</p>
+      <section v-for="element in activeSubentries" :key="element.id">
+         <div class="config-section-heading">
+            <h2>{{ element.name }}{{ element.valid ? '' : ' (unknown element)' }}</h2>
+            <button type="button" class="btn btn-flat" :aria-label="`Remove ${element.name} from subentries`"
+               @click="delete draft[element.id]"><i class="material-symbols-outlined">delete</i></button>
          </div>
 
-         <span class="helper-text">Optional attributes this element must have to become a subentry</span>
-
-         <div v-for="attribute in element.attributes" :key="attribute.name" class="att">
-            <label :for="`subbing-${element.id}-${attribute.name}`" class="name">@{{ attribute.name }}</label>
-            <FormSelect v-if="attribute.options.length" v-model="draft[element.id].attributes[attribute.name]" class="value"
-               :id="`subbing-${element.id}-${attribute.name}`" :options="attribute.options" :aria-label="attribute.name"/>
-            <input v-else v-model="draft[element.id].attributes[attribute.name]" :id="`subbing-${element.id}-${attribute.name}`"
-               type="text" class="value" placeholder="Value">
-            <button type="button" class="btn btn-small red lighten-1" :aria-label="`Remove required attribute ${attribute.name}`"
-               @click="delete draft[element.id].attributes[attribute.name]"><i class="material-symbols-outlined">delete</i></button>
+         <div v-if="element.attributes.length || element.availableAttributes.length" class="config-field">
+            <h3>Required attributes</h3>
+            <p class="helper-text">Add attributes that this element must match to become a subentry.</p>
+            <div v-for="attribute in element.attributes" :key="attribute.name" class="config-control-row">
+               <label :for="`subbing-${element.id}-${attribute.name}`" class="subentry-attribute">@{{ attribute.name }}</label>
+               <FormSelect v-if="attribute.options.length" v-model="draft[element.id].attributes[attribute.name]"
+                  :id="`subbing-${element.id}-${attribute.name}`" :options="attribute.options"/>
+               <input v-else v-model="draft[element.id].attributes[attribute.name]" :id="`subbing-${element.id}-${attribute.name}`"
+                  type="text" placeholder="Any value">
+               <button type="button" class="btn btn-flat" :aria-label="`Remove required attribute ${attribute.name}`"
+                  @click="delete draft[element.id].attributes[attribute.name]"><i class="material-symbols-outlined">delete</i></button>
+            </div>
+            <div v-if="element.availableAttributes.length" class="config-control-row">
+               <FormSelect v-model="newAttribute[element.id]" aria-label="Required subentry attribute"
+                  placeholder="Choose an attribute" :options="element.availableAttributes"/>
+               <button class="btn" type="button" :disabled="!newAttribute[element.id]" @click="addAttribute(element.id)">
+                  Add attribute
+               </button>
+            </div>
          </div>
 
-         <div v-if="element.availableAttributes.length" class="att-new">
-            <FormSelect v-model="newAttribute[element.id]" class="name" aria-label="Required subentry attribute"
-               placeholder="Choose an attribute" :options="element.availableAttributes"/>
-            <button class="btn btn-small" type="button" :disabled="!newAttribute[element.id]"
-               @click="addAttribute(element.id)" aria-label="Add required subentry attribute"><i class="material-symbols-outlined">add</i></button>
-         </div>
-
-         <div v-if="element.headwords.length > 1" class="att-new">
-            <label :for="`headword-${element.id}`" class="name">Headword element</label>
-            <FormSelect :id="`headword-${element.id}`" class="value" aria-label="Headword element"
+         <div v-if="element.headwords.length > 1" class="config-field">
+            <label :for="`headword-${element.id}`">Headword element</label>
+            <FormSelect :id="`headword-${element.id}`"
                v-model="draft[element.id].titling.headword" :options="element.headwords"/>
-            <span class="helper-text">Select which descendant element of <b>{{ element.name }}</b> to use as the headword.</span>
+            <span class="helper-text">Choose a descendant of <b>{{ element.name }}</b> to use as its headword.</span>
          </div>
-      </div>
+      </section>
 
-      <div v-if="availableSubentries.length" class="row" style="margin-top: 15px;">
-         <div class="input-field col s6">
-            <FormSelect id="new-element" v-model="newElement" :options="availableSubentries"
-               aria-label="Subentry element" placeholder="Choose an element"/>
-            <span class="helper-text">Elements listed here function as subentries which can be shared by multiple entries.</span>
-         </div>
-         <div class="input-field col s1">
-            <button type="button" class="btn btn-small" :disabled="!newElement" @click="addSubentry" aria-label="Add subentry element">
-               <i class="material-symbols-outlined">add</i>
-            </button>
+      <div v-if="availableSubentries.length" class="config-field">
+         <label for="new-element">Subentry element</label>
+         <div class="config-control-row">
+            <FormSelect id="new-element" v-model="newElement" :options="availableSubentries" placeholder="Choose an element"/>
+            <button type="button" class="btn" :disabled="!newElement" @click="addSubentry">Add subentry</button>
          </div>
       </div>
-   </template>
+   </div>
    <p v-else-if="!loading">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
 </div>
 </template>
@@ -64,6 +61,7 @@ import { useDictionarySetting } from '../js/use-dictionary-setting.ts'
 import DictConfigButtons from './dict-config-buttons.vue'
 import DictNav from './dict-nav.vue'
 import FormSelect from './FormSelect.vue'
+import '../css/dict-config-form.css'
 import LoadingOverlay from './loading-overlay.vue'
 
 type SubentryDraft = { attributes: Record<string, string>; titling: { headword: string } }
@@ -141,65 +139,18 @@ function addAttribute(id: string) {
 }
 </script>
 
-<style>
-.dict-config-subbing .element-info {
-   display: flex;
-   flex-direction: column;
-
-   border: 1px solid #CCC;
-   margin: 15px 0;
-   border-radius: 3px;
-   padding: 15px 30px;
+<style scoped>
+h3 {
+   font-size: 1rem;
+   margin: 0;
 }
-
-.dict-config-subbing .element-info > .header {
-   display: flex;
-   flex-direction: row;
-   flex-wrap: nowrap;
-   align-items: baseline;
-   justify-content: space-between;
-   border-bottom: 1px solid #9e9e9e;
-   margin-bottom: 25px;
+.subentry-attribute {
+   flex: 0 1 30%;
+   font-family: monospace;
+   text-transform: none;
+   overflow-wrap: anywhere;
 }
-.dict-config-subbing .element-info > .helper-text {
-   margin-left: 25px;
-}
-
-.dict-config-subbing .element-info > .att,
-.dict-config-subbing .element-info > .att-new {
-   margin-left: 25px;
-   padding-top: 25px;
-   display: flex;
-   flex-direction: row;
-   align-items: baseline;
-   flex-wrap: nowrap;
-   width: 66.66%;
-}
-
-.dict-config-subbing .att > * {
-   margin-right: 15px!important;
-   flex: none;
-}
-.dict-config-subbing .att > .name {
-   min-width: 16.667%
-}
-.dict-config-subbing .att > .value {
-   flex: auto;
-}
-
-.dict-config-subbing .att + .att-new {
-   border-top: 1px solid #9e9e9e;
-}
-.dict-config-subbing .element-info > .att-new {
-   flex-wrap: wrap;
-   justify-content: stretch;
-}
-.dict-config-subbing .att-new > * {
-   margin-right: 15px!important;
-   flex: none;
-}
-.dict-config-subbing .att-new > .name,
-.dict-config-subbing .att-new > .value {
-   flex: auto;
+.config-field + .config-field {
+   margin-top: 1rem;
 }
 </style>

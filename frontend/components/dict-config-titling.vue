@@ -2,85 +2,70 @@
 <div class="dict-config-titling">
    <LoadingOverlay v-if="loading || saving"/>
    <DictNav :links="[['config', 'Configure'], ['config-titling', 'Headword list']]"/>
-   <h1>Headword</h1>
-   <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || !ready"></DictConfigButtons>
-   <template v-if="ready">
-      <div class="row">
-         <div class="input-field col s6">
-            <FormSelect id="headword" v-model="draft.headword" :options="options(draft.headword)" aria-label="Headword"/>
-            <span class="helper-text">Select the element which contains the entry's headword. If you make no selection here Lexonomy will try to guess what the headword of each entry is.</span>
-         </div>
-      </div>
-      <div class="row">
-         <div class="input-field col s6">
-            <FormSelect id="headwordSorting" v-model="draft.headwordSorting" :options="options(draft.headwordSorting)" aria-label="Headword sorting"/>
-            <span class="helper-text">Select the element which will be used for sorting of headwords in the entry list. If you make no selection here Lexonomy will use the element you chose for headword.</span>
-         </div>
-         <div class="input-field col s6">
-            <label style="padding-top: 30px;">
-               <input type="checkbox"
-                     id="sortDesc"
-                     v-model="draft.sortDesc"/>
+   <h1>Headword list</h1>
+   <DictConfigButtons :dict-id="dictId" :save-data="saveData" :disabled="saving || !ready"/>
+   <div v-if="ready" class="config-form">
+      <section>
+         <h2>Headword and sorting</h2>
+         <div class="config-fields">
+            <div class="config-field">
+               <label for="headword">Headword element</label>
+               <FormSelect id="headword" v-model="draft.headword" :options="options(draft.headword)" aria-describedby="headword-help"/>
+               <span id="headword-help" class="helper-text">If unset, Lexonomy will try to find the headword in each entry.</span>
+            </div>
+            <div class="config-field">
+               <label for="headwordSorting">Sort by element</label>
+               <FormSelect id="headwordSorting" v-model="draft.headwordSorting" :options="options(draft.headwordSorting)"
+                  aria-describedby="sort-element-help"/>
+               <span id="sort-element-help" class="helper-text">If unset, entries are sorted by the headword element.</span>
+            </div>
+            <div class="config-field">
+               <label for="sort_locale">Sort language</label>
+               <FormSelect id="sort_locale" v-model="draft.locale" :options="locales"/>
+            </div>
+            <label class="sort-direction">
+               <input type="checkbox" v-model="draft.sortDesc"/>
                <span>Sort in descending order</span>
             </label>
          </div>
-      </div>
-      <div class="row">
-         <h4>Headword annotations</h4>
-      </div>
-      <div class="row">
-         <div class="col s5">
-            <label>
-               <input name="hwannotype"
-                     type="radio"
-                     value="simple"
-                     v-model="draft.headwordAnnotationsType"/>
-               <span>simple</span>
-            </label>
-            <br/>
-            <div class="input-field">
-               <select id="headwordAnnotations" class="browser-default" aria-label="Headword annotations" v-model="draft.headwordAnnotations"
-                     multiple
-                     :disabled="draft.headwordAnnotationsType === 'advanced'">
+      </section>
+
+      <section>
+         <h2>Headword annotations</h2>
+         <div class="config-fields">
+            <div class="config-field annotation">
+               <label>
+                  <input name="hwannotype" type="radio" value="simple" v-model="draft.headwordAnnotationsType"/>
+                  <span>Simple</span>
+               </label>
+               <select id="headwordAnnotations" class="browser-default" multiple size="5"
+                  aria-label="Annotation elements" aria-describedby="annotation-elements-help" v-model="draft.headwordAnnotations"
+                  :disabled="draft.headwordAnnotationsType === 'advanced'">
                   <option v-for="name in annotationOptions" :key="name" :value="name">{{ name }}</option>
                </select>
-               <span class="helper-text">You can select any elements here whose content you want displayed beside the headword in the entry list, such as homograph numbers or part-of-speech labels.</span>
+               <span id="annotation-elements-help" class="helper-text">Select elements to display beside the headword, such as homograph numbers or part-of-speech labels.</span>
+            </div>
+            <div class="config-field annotation">
+               <label>
+                  <input name="hwannotype" type="radio" value="advanced" v-model="draft.headwordAnnotationsType"/>
+                  <span>Advanced</span>
+               </label>
+               <textarea id="advancedAnnotations" class="materialize-textarea" v-model="draft.headwordAnnotationsAdvanced"
+                  aria-label="Annotation HTML" aria-describedby="annotation-html-help" :disabled="draft.headwordAnnotationsType === 'simple'"/>
+               <span id="annotation-html-help" class="helper-text">Enter HTML with element placeholders, for example <code>&lt;b&gt;%(headword)&lt;/b&gt;</code>.</span>
             </div>
          </div>
-         <div class="col s5">
-            <label>
-               <input name="hwannotype"
-                     type="radio"
-                     value="advanced"
-                     v-model="draft.headwordAnnotationsType"/>
-               <span>advanced</span>
-            </label>
-            <br/>
-            <div class="input-field">
-               <textarea id="advancedAnnotations"
-                     class="materialize-textarea"
-                     placeholder="headword annotations"
-                     :disabled="draft.headwordAnnotationsType == 'simple'" v-model="draft.headwordAnnotationsAdvanced"></textarea>
-               <span class="helper-text">You can insert any HTML containing placeholders for elements in the form of '%(element)', e.g. '&lt;b>%(headword)&lt;/b>'.</span>
-            </div>
+      </section>
+
+      <section>
+         <h2>Entry list</h2>
+         <div class="config-field">
+            <label for="numberEntries">Entries per page</label>
+            <input v-model="draft.numberEntries" id="numberEntries" type="number" min="1" aria-describedby="entry-limit-help"/>
+            <span id="entry-limit-help" class="helper-text">Use a smaller number to load the list faster when entries contain large XML documents.</span>
          </div>
-      </div>
-      <div class="row">
-         <div class="input-field col s8">
-            <FormSelect id="sort_locale" v-model="draft.locale" :options="locales" aria-label="Alphabetical order"/>
-            <span class="helper-text">Select language to sort entries alphabetically in the entry list.</span>
-         </div>
-      </div>
-      <div class="row">
-         <div class="input-field col s6">
-            <input v-model="draft.numberEntries"
-                  id="numberEntries"
-                  type="number" min="1" />
-            <label for="numberEntries" class="active">Number of entries to be shown in the entry list at once</label>
-            <span class="helper-text">If your dictionary contains large entries (large XML files), it is recommended to reduce this number for quicker loading of entry list.</span>
-         </div>
-      </div>
-   </template>
+      </section>
+   </div>
    <p v-if="!loading && !ready">Settings could not be loaded. <button class="btn-flat" type="button" @click="load">Retry</button></p>
 </div>
 </template>
@@ -95,6 +80,7 @@ import { activeDictionary } from '../js/dictionary-workspace.ts'
 import type { DictionarySettings } from '../js/dictionary-config-api.ts'
 import Materialize from '../libs/materialize/materialize.min.js'
 import FormSelect from './FormSelect.vue'
+import '../css/dict-config-form.css'
 
 const props = defineProps<{ dictId: string }>()
 const defaults = { numberEntries: 1000, headword: '', headwordSorting: '', headwordAnnotationsType: 'simple' as const,
@@ -129,3 +115,19 @@ function saveData() {
    return save(settings)
 }
 </script>
+
+<style scoped>
+.sort-direction {
+   align-self: center;
+}
+.config-field.annotation > :is(select, textarea) {
+   min-height: 9rem;
+   padding: .5rem;
+}
+.annotation textarea {
+   resize: vertical;
+}
+#numberEntries {
+   width: min(100%, 10rem);
+}
+</style>

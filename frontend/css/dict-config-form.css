@@ -1,0 +1,64 @@
+.config-form {
+   max-width: 56rem;
+   margin: 1.25rem 0 2rem;
+}
+.config-form > * + * {
+   margin-top: 1.25rem;
+}
+.config-form h2 {
+   font-size: 1.3rem;
+   margin: 0 0 .75rem;
+   padding-bottom: .4rem;
+   border-bottom: 2px solid #004494;
+}
+.config-section-heading {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: .75rem;
+   padding-bottom: .4rem;
+   margin-bottom: .75rem;
+   border-bottom: 2px solid #004494;
+}
+.config-form .config-section-heading h2 {
+   border: 0;
+   margin: 0;
+   padding: 0;
+   overflow-wrap: anywhere;
+}
+.config-fields {
+   display: grid;
+   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+   gap: .85rem 1.5rem;
+}
+.config-field {
+   display: flex;
+   flex-direction: column;
+   gap: .25rem;
+   min-width: 0;
+   max-width: 32rem;
+}
+.config-field > label {
+   color: #004494;
+   font-size: .9rem;
+}
+.config-form .helper-text {
+   font-size: .875rem;
+   color: #526475;
+   margin: 0;
+}
+.config-form :is(.config-field, .config-control-row) > :is(input, .form-select-trigger, textarea, select) {
+   margin: 0;
+}
+.config-control-row {
+   display: flex;
+   align-items: center;
+   gap: .5rem;
+}
+.config-control-row > :is(input, .form-select-trigger) {
+   flex: 1;
+   min-width: 0;
+}
+.config-control-row > button.btn {
+   flex-shrink: 0;
+}

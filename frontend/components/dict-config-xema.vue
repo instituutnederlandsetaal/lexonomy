@@ -179,12 +179,16 @@ function exampleDTD() {
    display: flex;
    flex-wrap: nowrap;
 }
-.dict-config-xema #editor .details {flex-grow: 1; overflow: hidden; max-width: 100%;}
-
-.dict-config-xema .editor .list { flex-basis: 0; }
-
-.dict-config-xema #editor.designer input.textbox.cap {
-   width: 15em !important;
+.dict-config-xema #editor .details { flex: 1; min-width: 0; overflow: hidden; }
+.dict-config-xema #editor .list { max-width: 45%; overflow: auto; }
+@media (max-width: 700px) {
+   .dict-config-xema #editor { flex-direction: column; }
+   .dict-config-xema #editor .list {
+      max-width: none;
+      max-height: 17rem;
+      border-right: 0;
+      border-bottom: 1px solid #1e6bcf;
+   }
 }
 .dict-config-xema #editor.designer input[type=radio] {
    opacity: 1 !important;

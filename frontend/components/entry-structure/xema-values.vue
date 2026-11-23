@@ -1,29 +1,25 @@
 <template>
    <div class="block">
       <div class="title">Values</div>
-      <table>
-         <tbody>
-            <tr v-for="(value, index) in values" :key="index">
-               <td class="cell1">
-                  <input class="textbox val" placeholder="value" aria-label="Value" :value="value.value"
-                     @input="update(index, 'value', $event)">
-                  <input class="textbox cap" placeholder="caption" aria-label="Caption" :value="value.caption"
-                     @input="update(index, 'caption', $event)">
-               </td>
-               <td class="cell9">
-                  <button type="button" class="iconOnly iconCross" aria-label="Delete value"
-                     @click="emit('update', values.filter((_, row) => row !== index))">&nbsp;</button>
-               </td>
-            </tr>
-         </tbody>
-      </table>
+      <ul v-if="values.length" class="value-list">
+         <li v-for="(value, index) in values" :key="index" class="value-row">
+            <input class="textbox val" placeholder="value" aria-label="Value" :value="value.value"
+               @input="update(index, 'value', $event)">
+            <input class="textbox" placeholder="caption" aria-label="Caption" :value="value.caption"
+               @input="update(index, 'caption', $event)">
+            <button type="button" class="iconOnly iconCross" aria-label="Delete value"
+               @click="emit('update', values.filter((_, row) => row !== index))">&nbsp;</button>
+         </li>
+      </ul>
 
       <button v-if="!adding" type="button" class="butNewValue iconAdd" @click="begin">Add...</button>
-      <form v-else @submit.prevent="add">
-         <input ref="valueInput" v-model="newValue" class="textbox new val" placeholder="value" aria-label="New value" required>
-         <input v-model="newCaption" class="textbox new cap" placeholder="caption" aria-label="New caption">
-         <button type="submit" class="butNewValueOK iconAccept" :disabled="!newValue">Add</button>
-         <button type="button" class="butNewValueCancel iconCancel" @click="adding = false">Cancel</button>
+      <form v-else class="value-row" @submit.prevent="add">
+         <input ref="valueInput" v-model="newValue" class="textbox val" placeholder="value" aria-label="New value" required>
+         <input v-model="newCaption" class="textbox" placeholder="caption" aria-label="New caption">
+         <div class="value-actions">
+            <button type="submit" class="iconAccept" :disabled="!newValue">Add</button>
+            <button type="button" class="iconCancel" @click="adding = false">Cancel</button>
+         </div>
          <div v-if="duplicate" class="warn" role="alert">This value already exists.</div>
       </form>
    </div>
@@ -64,3 +60,34 @@ function add() {
    valueInput.value?.focus()
 }
 </script>
+
+<style scoped>
+.value-list {
+   margin: 0 0 .5rem;
+}
+.value-row {
+   display: grid;
+   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 2rem;
+   align-items: center;
+   gap: .5rem;
+}
+.value-list > li {
+   padding: .35rem 0;
+   border-bottom: 1px solid #ddd;
+}
+#editor.designer .value-row .textbox {
+   width: 100%;
+   height: 2.25rem;
+   margin: 0;
+}
+#editor.designer .value-row .val {
+   font-family: monospace;
+   color: #0268cb;
+}
+#editor.designer .value-row .iconOnly {
+   margin: 0;
+}
+.value-actions, .warn {
+   grid-column: 1 / -1;
+}
+</style>

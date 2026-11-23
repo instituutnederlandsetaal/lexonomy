@@ -1,11 +1,9 @@
 <template>
-<div class="dict-config-element-in-tree container" :class="{ collapsed: !expanded, hasChildren }">
-    <div class="horizontal">
-        <button v-if="hasChildren" type="button" class="plusminus"
-            :aria-label="expanded ? 'Collapse element' : 'Expand element'" :aria-expanded="expanded" @click="expanded = !expanded"/>
-    </div>
+<div class="tree-node">
+    <button v-if="hasChildren" type="button" class="plusminus"
+        :aria-label="expanded ? 'Collapse element' : 'Expand element'" :aria-expanded="expanded" @click="expanded = !expanded"/>
 
-    <button type="button" class="clickable element" :class="{ current: currentElement === id && !currentAttribute }"
+    <button type="button" class="clickable" :class="{ current: currentElement === id && !currentAttribute }"
         @click="emit('select', id)">
         <span class="tech">
             <span class="brak">&lt;</span>
@@ -54,28 +52,3 @@ const attributes = computed(() => Object.keys(element.value?.attributes ?? {}).s
 const children = computed(() => (element.value?.children ?? []).filter(child => Object.hasOwn(props.xema.elements, child.name)))
 const hasChildren = computed(() => !props.ancestors.includes(props.id) && Boolean(attributes.value.length || children.value.length))
 </script>
-
-<style>
-.dict-config-element-in-tree {
-    position: relative;
-    display: block;
-    width: auto!important;
-}
-/* Hide the part of the parent line below the last child. */
-.dict-config-element-in-tree:last-child:before {
-    content: "";
-    display: block;
-    position: absolute;
-    left: -16px;
-    bottom: 0;
-    width: 2px;
-    top: 16px;
-    background: white;
-}
-.dict-config-element-in-tree .horizontal button.plusminus,
-.dict-config-element-in-tree button.clickable,
-.dict-config-attribute-in-tree button.clickable {
-    border: 0;
-    background-color: transparent;
-}
-</style>

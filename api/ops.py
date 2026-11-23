@@ -863,7 +863,8 @@ def is_subentry(config: ConfigSubbing, el: Tag, element_id: str) -> bool:
 
 
 def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entryID: int, email: str, definition_id: str,
-                       *, maintenance=False, importing: ImportEntries | None = None):
+                        *, maintenance=False, importing: ImportEntries | None = None,
+                        inherited_preserve: bool = False):
     """
     Ensure this entry has all subentries properly extracted and referenced through xml and database.
     Also flag any parent entries for needs_update.
@@ -890,10 +891,11 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
 
     config = configs["subbing"]
     xema = configs["xema"]
-    extracted: list[tuple[Tag, str]] = []
+    extracted: list[tuple[Tag, str, bool]] = []
     existing: dict[int, list[tuple[Tag, str]]] = defaultdict(list)
 
-    def collect(node, parent_id):
+    def collect(node, parent_id, inherited_preserve):
+        preserve = inherited_preserve or node.get("xml:space") == "preserve"
         for child in node.find_all(recursive=False):
             if child.name == "lxnm:subentryParent":
                 existing[int(child["id"])].append((child, parent_id))
@@ -906,14 +908,14 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
             else:
                 extract = is_subentry(config, child, child_id)
             if extract:
-                extracted.append((child, child_id))
+                extracted.append((child, child_id, preserve))
             else:
-                collect(child, child_id)
+                collect(child, child_id, preserve)
 
     if config or entryXml.find(SUBENTRY) or (importing is not None and importing.archival):
-        collect(entryXml, definition_id)
+        collect(entryXml, definition_id, inherited_preserve)
     validSubentryIDs: set[int] = set()
-    for child, child_id in extracted:
+    for child, child_id, preserve in extracted:
         for ancestor in child.parents:
             if not ancestor.name or ancestor.name == "[document]":
                 break
@@ -922,7 +924,7 @@ def presave_subentries(dictDB: Connection, configs: Configs, entryXml: Tag, entr
                     child.attrs.setdefault(name, value)
         subentry_id, subentry, success, _ = createEntry(
             dictDB, configs, child, email, commit=False, xema_element_id=child_id,
-            maintenance=maintenance, importing=importing)
+            maintenance=maintenance, importing=importing, inherited_preserve=preserve)
         if success:
             title = get_entry_title(subentry, configs, xema_element_id=child_id)[0]
             marker = BeautifulSoup().new_tag("lxnm:subentryParent", attrs={
@@ -1422,9 +1424,53 @@ def presave_autonumbering(dictDB: Connection, configs: Configs, entry: Tag, isAu
 
     return touched_entry
 
+
+def same_imported_entry(xema: ConfigXema, definition_id: str, stored: Tag, incoming: Tag,
+                        inherited_preserve: bool) -> bool:
+    """Compare duplicate definitions without changing either XML tree."""
+    def has_text(node: Tag) -> bool:
+        return any(type(child) in (NavigableString, CData) and child.strip(" \t\r\n")
+                   for child in node.contents)
+
+    def significant_whitespace(left: Tag, right: Tag, element_id: str, preserve_space: bool) -> bool:
+        definition = xema["elements"].get(element_id)
+        if definition is not None and xema_get_element_name_from_id(xema, element_id) == left.name:
+            # Match Xematron's hasText; an omitted filling defaults to child elements.
+            return definition.get("filling") in ("inl", "txt", "lst", "med")
+        return preserve_space or has_text(left) or has_text(right)
+
+    def children(node: Tag, preserve: bool):
+        # Expat may split the same run of text differently across parses.
+        for is_text, group in itertools.groupby(node.contents, key=lambda child: type(child) is NavigableString):
+            if not is_text:
+                yield from group
+            else:
+                text = "".join(group)
+                if preserve or text.strip(" \t\r\n"):
+                    yield text
+
+    pending = [(stored, incoming, definition_id, inherited_preserve)]
+    while pending:
+        left, right, element_id, preserve_space = pending.pop()
+        if left.name != right.name or left.attrs != right.attrs:
+            return False
+        preserve_space = preserve_space or left.get("xml:space") == "preserve"
+        preserve = significant_whitespace(left, right, element_id, preserve_space)
+        for a, b in itertools.zip_longest(children(left, preserve), children(right, preserve)):
+            if type(a) is not type(b):
+                return False
+            if isinstance(a, Tag):
+                child_id = xema_get_id_from_element_name(xema, a.name, element_id)
+                pending.append((a, b, child_id, preserve_space))
+            elif a != b:
+                return False
+    return True
+
+
 def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], email: str, id: Optional[int] = None,
                 *, commit: bool = True, xema_element_id: Optional[str] = None,
-                maintenance: bool = False, importing: ImportEntries | None = None) -> Union[
+                maintenance: bool = False, importing: ImportEntries | None = None,
+                inherited_preserve: bool = False) -> Union[
     Tuple[int, Tag, Literal[True], Optional[Any]],
     Tuple[Optional[int], Optional[Tag], Literal[False], Any]
 ]:
@@ -1448,6 +1494,8 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
     doctype = get_entry_doctype(xml)
     definition_id = xema_element_id or entry_schema_id(configs, xml)
     id, isNewEntry = get_entry_id(xml, dictDB, id)
+    old_xml = None
+    old_entry = None
     if not isNewEntry and not xema_element_id and XEMA_DEFINITION_ATTRIBUTE not in xml.attrs:
         old_xml = dictDB.execute("select xml from entries where id=?", (id,)).fetchone()["xml"]
         if old_xml and XEMA_DEFINITION_ATTRIBUTE in old_xml:
@@ -1458,7 +1506,8 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
         xml[XEMA_DEFINITION_ATTRIBUTE] = definition_id
     else:
         xml.attrs.pop(XEMA_DEFINITION_ATTRIBUTE, None)
-    presave_subentries(dictDB, configs, xml, id, email, definition_id, maintenance=maintenance, importing=importing)
+    presave_subentries(dictDB, configs, xml, id, email, definition_id, maintenance=maintenance,
+                       importing=importing, inherited_preserve=inherited_preserve)
     if importing is None or not importing.archival:
         presave_autonumbering(dictDB, configs, xml, isAutoApplying=True)
     titleText, titleHtml = get_entry_title(xml, configs, definition_id)
@@ -1470,11 +1519,15 @@ def createEntry(dictDB: Connection, configs: Configs, xml: Union[str, Tag], emai
     xmlstr = str(xml)
     if importing is not None:
         if id in importing.defined:
-            original = dictDB.execute("select xml from entries where id=?", (id,)).fetchone()[0]
-            if xmlstr != original and xmlstr != str(parse(original)):
+            if old_xml is None:
+                old_xml = dictDB.execute("select xml from entries where id=?", (id,)).fetchone()[0]
+            if xmlstr != old_xml and not same_imported_entry(
+                configs["xema"], definition_id, old_entry if old_entry is not None else parse(old_xml), xml,
+                inherited_preserve or importing.defined[id],
+            ):
                 raise ValueError(f"Conflicting definitions for entry {id} in the same XML document.")
             return id, xml, True, None
-        importing.defined.add(id)
+        importing.defined[id] = inherited_preserve
     presave_searchables(dictDB, configs, xml, id, titleText)
     doSql(dictDB, "update entries set doctype=?, xml=?, title=?, sortkey=?, flag=?, needs_update=0 where id=?", (doctype, xmlstr, titleHtml, sortKey, flag, id))
     if not maintenance:
@@ -2087,7 +2140,8 @@ def import_dictionary(dictDB: Connection, data: bytes, email: str,
             "select entry_id from document_parts where entry_id is not null")}
         for count, span in enumerate(document.entries, 1):
             xml = document.markup(span.start, span.end)
-            entry_id = save_imported_record(dictDB, configs, state, xml, span.inherited, document.doctype, email)
+            entry_id = save_imported_record(dictDB, configs, state, xml, span.inherited, document.doctype, email,
+                                            inherited_preserve=span.inherited_preserve)
             placement = entry_id if entry_id not in anchored else None
             anchored.add(entry_id)
             position += 1
@@ -2107,7 +2161,7 @@ def import_dictionary(dictDB: Connection, data: bytes, email: str,
 
 
 def save_imported_record(dictDB: Connection, configs: Configs, state: ImportEntries, xml: str,
-                         inherited: dict[str, str], doctype: str, email: str) -> int:
+                         inherited: dict[str, str], doctype: str, email: str, *, inherited_preserve: bool) -> int:
     """Use the same index projection as reindexing for entries needing no XML transformation."""
     fields = None
     if (not doctype and not inherited and not configs["links"] and "<" + SUBENTRY not in xml and EMBEDDED not in xml
@@ -2135,7 +2189,7 @@ def save_imported_record(dictDB: Connection, configs: Configs, state: ImportEntr
                 if not is_new:
                     for table, key in (("searchables", "entry_id"), ("linkables", "entry_id"), ("sub", "parent_id")):
                         dictDB.execute(f"delete from {table} where {key}=?", (entry_id,))
-            state.defined.add(entry_id)
+            state.defined[entry_id] = inherited_preserve
             definition = schema_id_for_tag(configs, node.tag)
             title, title_html = get_entry_title(fields, configs, definition)
             dictDB.executemany(INSERT_SEARCHABLE, entry_searchables(configs, fields, entry_id, title))
@@ -2150,7 +2204,8 @@ def save_imported_record(dictDB: Connection, configs: Configs, state: ImportEntr
     tag = parse(xml, doctype=doctype)
     for name, value in inherited.items():
         tag.attrs.setdefault(name, value)
-    entry_id, _, success, _ = createEntry(dictDB, configs, tag, email, commit=False, importing=state)
+    entry_id, _, success, _ = createEntry(dictDB, configs, tag, email, commit=False, importing=state,
+                                         inherited_preserve=inherited_preserve)
     if not success:
         raise ValueError("Could not import an XML entry.")
     return entry_id

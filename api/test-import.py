@@ -1156,6 +1156,96 @@ except Exception:
 
 
 try:
+    assert ops.makeDict("duplicate-import", "blank", "Duplicate XML", "", "root@localhost")
+    with closing(ops.getDB("duplicate-import")) as db:
+        xema = {"root": "entry", "elements": {
+            "entry": {"filling": "chd", "children": [
+                {"name": "idiom"}, {"name": "block_quote"}, {"name": "term"},
+            ]},
+            "idiom": {"elementName": "entry", "filling": "chd", "children": [{"name": "inline_quote"}]},
+            "block_quote": {"elementName": "quote", "filling": "chd"},
+            "inline_quote": {"elementName": "quote", "filling": "inl"},
+            "term": {"filling": "txt"},
+            "empty": {"filling": "emp"},
+            "list": {"filling": "lst"},
+            "media": {"filling": "med"},
+        }}
+        ops.updateDictConfig(db, "duplicate-import", "xema", xema)
+        ops.updateDictConfig(db, "duplicate-import", "subbing", {"idiom": {}})
+
+        def load_duplicates(source, *, conflict=False):
+            document = f'<dict xmlns:lxnm="http://www.lexonomy.eu/">{source}</dict>'.encode()
+            try:
+                ops.import_dictionary(db, document, "test@lexonomy", lambda *_: None, purge_history=True)
+            except ValueError as error:
+                assert conflict and str(error) == "Conflicting definitions for entry 31479 in the same XML document."
+            else:
+                assert not conflict, source
+
+        def duplicate(body):
+            return f'<entry lxnm:id="31479">{body}</entry>'
+
+        def parent(body):
+            return f'<entry lxnm:id="1">{body}</entry>'
+
+        load_duplicates(parent(duplicate("\n    <form><orth>Idiom</orth></form>\n  "))
+                        + duplicate("\n  <form><orth>Idiom</orth></form>\n"))
+        assert db.execute("select count(*) from entries").fetchone()[0] == 2
+        assert tuple(db.execute("select parent_id, child_id from sub").fetchone()) == (1, 31479)
+        original = db.execute("select xml from entries where id=31479").fetchone()[0]
+        assert "\n    <form><orth>Idiom</orth></form>\n  " in original
+
+        load_duplicates(parent(duplicate("<quote><hi>a</hi> <hi>b</hi></quote>"))
+                        + duplicate("<quote><hi>a</hi><hi>b</hi></quote>"), conflict=True)
+        assert db.execute("select xml from entries where id=31479").fetchone()[0] == original
+
+        for left, right, conflict in (
+            ("<quote><hi>a</hi> <hi>b</hi></quote>", "<quote><hi>a</hi><hi>b</hi></quote>", False),
+            ("<term> </term>", "<term/>", True),
+            ("<list> </list>", "<list/>", True),
+            ("<media> </media>", "<media/>", True),
+            ("<empty> </empty>", "<empty/>", False),
+            ("text<hi/> <hi/>", "text<hi/><hi/>", False),  # schema beats the mixed-content fallback
+            ("text<hi/>", "other<hi/>", True),
+            ("<first/>", "<second/>", True),
+            ("A <hi/>", "A  <hi/>", True),
+            ("<hi/>\u00a0", "<hi/>", True),
+            ("<hi/><![CDATA[ ]]>", "<hi/>", True),
+            ("<!--a--><?editor keep?>", "<?editor keep?><!--a-->", True),
+            ("<hi a='1' b='2'/>", '<hi b="2" a="1"></hi>', False),
+        ):
+            load_duplicates(duplicate(left) + duplicate(right), conflict=conflict)
+
+        preserve = '<section xml:space="preserve">'
+        load_duplicates(preserve + duplicate("<hi/> <hi/>") + "</section>" + duplicate("<hi/><hi/>"))
+        # <form> is not in Xema: the path outside the extracted definition matters on either side.
+        spaced = duplicate("<form><hi/>\n  <hi/></form>")
+        compact = duplicate("<form><hi/><hi/></form>")
+        load_duplicates(preserve + parent(spaced) + "</section>" + compact, conflict=True)
+        load_duplicates(parent(spaced) + preserve + compact + "</section>", conflict=True)
+        load_duplicates('<entry lxnm:id="1" xml:space="preserve">' + spaced + "</entry>" + compact,
+                        conflict=True)
+        load_duplicates(preserve + parent(spaced) + "</section>" + spaced)
+        load_duplicates(preserve + '<section xml:space="default">' + parent(spaced)
+                        + "</section></section>" + compact, conflict=True)
+        load_duplicates(duplicate('<form xml:space="preserve"><hi/> <hi/></form>')
+                        + duplicate('<form xml:space="preserve"><hi/><hi/></form>'), conflict=True)
+
+        ops.updateDictConfig(db, "duplicate-import", "xema", {"root": "", "elements": {}})
+        ops.updateDictConfig(db, "duplicate-import", "subbing", {})
+        load_duplicates(spaced + compact)
+        load_duplicates(duplicate("<form><hi>text</hi> <hi/></form>")
+                        + duplicate("<form><hi>text</hi><hi/></form>"))
+        load_duplicates(duplicate("<form>text<hi/> <hi/></form>")
+                        + duplicate("<form>text<hi/><hi/></form>"), conflict=True)
+        load_duplicates(duplicate("<quote>a <hi>b</hi></quote>")
+                        + duplicate("<quote>a<hi>b</hi></quote>"), conflict=True)
+    print("PASS XML import compares duplicate definitions using Xema, mixed content and xml:space")
+except Exception:
+    failures += 1
+    traceback.print_exc()
+
+try:
     from xml.etree import ElementTree
 
     assert ops.makeDict("document-roundtrip", "blank", "XML document", "", "root@localhost")

@@ -76,9 +76,9 @@ Vite writes the production site to `frontend/dist/`. It hashes bundled files and
 
 ## Configuration
 
-Configuration uses `config/siteconfig.json` when present.
+Configuration uses `config/siteconfig.json` when present. Comments (`//` and `/* */`) are allowed.
 When missing, Lexonomy uses the example configuration file `config/siteconfig.example.json`.
-Before editing the configuration, make a copy of the example file as `config/siteconfig.json` you shouldn't edit the template.
+Copy the example file to `config/siteconfig.json` before editing. 
 
 ```sh
 cp config/siteconfig.example.json config/siteconfig.json
@@ -96,21 +96,23 @@ To change the config name or location, use environment variable `LEXONOMY_SITECO
 The production docker stack forwards this env var directly, the development stack instead forwards `LEXONOMY_DEV_SITECONFIG` as `LEXONOMY_SITECONFIG` inside the container.
 When running on the host, you should therefor use `LEXONOMY_SITECONFIG` to point to your configuration file (if you don't want to use the `config/` directory).
 
-### Server and client URLs
+### Server, client, and API URLs
 
-Both settings are optional.
+All three settings are optional.
 
 - `serverUrl` tells Lexonomy where to listen for HTTP requests and under which path to serve the site and API. It defaults to `0.0.0.0:8000/`, which means all network interfaces, port 8000, and the root path. If you give only a path, Lexonomy uses the default host and port.
-- `clientUrl` is the public address Lexonomy uses in emails and exported entry links. Lexonomy includes it in `index.html` so the browser knows where to send API requests. If you leave it out or set it to `""`, Lexonomy uses `http://` with the host, port, and path from `serverUrl`, replacing `0.0.0.0` with `localhost`. If you give only a path, it uses `http://localhost:8000` with that path.
+- `clientUrl` is the public address Lexonomy uses in emails and exported entry links. If you leave it out or set it to `""`, Lexonomy uses `http://` with the host, port, and path from `serverUrl`, replacing `0.0.0.0` with `localhost`. If you give only a path, it uses `http://localhost:8000` with that path.
+- `apiUrl` tells the browser where to send API requests. Use a path starting with `/` to send requests to the same origin that served the page. This lets you test on a local domain while keeping `clientUrl` set to the public domain. You can also specify a full HTTP(S) URL. If you leave `apiUrl` out or set it to `""`, the browser uses `clientUrl`.
 
-| `serverUrl` in config | `clientUrl` in config | Where Lexonomy listens | Public API root |
-| --- | --- | --- | --- |
-| Omitted | Omitted | `0.0.0.0:8000/` | `http://localhost:8000/` |
-| `"/lexonomy/"` | `""` | `0.0.0.0:8000/lexonomy/` | `http://localhost:8000/lexonomy/` |
-| `"0.0.0.0:9000/lexonomy/"` | Omitted | `0.0.0.0:9000/lexonomy/` | `http://localhost:9000/lexonomy/` |
-| `"/"` | `"https://example.org/lexonomy/"` | `0.0.0.0:8000/` | `https://example.org/lexonomy/` |
+| `serverUrl` | `clientUrl` | `apiUrl` | Where Lexonomy listens | Browser API root |
+| --- | --- | --- | --- | --- |
+| Omitted | Omitted | Omitted | `0.0.0.0:8000/` | `http://localhost:8000/` |
+| `"/lexonomy/"` | `""` | Omitted | `0.0.0.0:8000/lexonomy/` | `http://localhost:8000/lexonomy/` |
+| `"0.0.0.0:9000/lexonomy/"` | Omitted | Omitted | `0.0.0.0:9000/lexonomy/` | `http://localhost:9000/lexonomy/` |
+| `"/"` | `"https://example.org/lexonomy/"` | Omitted | `0.0.0.0:8000/` | `https://example.org/lexonomy/` |
+| `"/"` | `"https://example.org/lexonomy/"` | `"/lexonomy/"` | `0.0.0.0:8000/` | `/lexonomy/` on the page's origin |
 
-In the last example, the proxy removes `/lexonomy/` when forwarding requests to Lexonomy. If the proxy keeps that prefix, set `serverUrl` to `"/lexonomy/"` as well. Redirect `/lexonomy` to `/lexonomy/` at the proxy and serve both the site and API at the public address.
+In the last two examples, the proxy removes `/lexonomy/` when forwarding requests to Lexonomy. If the proxy keeps that prefix, set `serverUrl` to `"/lexonomy/"` as well. Redirect `/lexonomy` to `/lexonomy/` at the proxy and serve both the site and API at that prefix.
 
 When Vite serves the page during development, set `LEXONOMY_BACKEND_URL` to the API root Vite should forward requests to. It defaults to `http://127.0.0.1:8000` when you run Vite locally. [Frontend development](#frontend-development)
 

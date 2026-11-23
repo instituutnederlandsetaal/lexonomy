@@ -91,6 +91,24 @@ class PasswordResetTests(unittest.TestCase):
 
 
 class SiteConfigTests(unittest.TestCase):
+    def test_siteconfig_accepts_comments_and_preserves_strings(self):
+        source = r'''{
+            // Use the public address in generated links.
+            "dataDir": "data",
+            "clientUrl": "https://example.test/lexonomy", /* keep this address
+                even when testing on a different domain */
+            "apiUrl": "/lexonomy",
+            "welcome": "He said \"// and /* */\"."
+        } // End of configuration'''
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "siteconfig.json"
+            path.write_text(source, encoding="utf-8")
+            with patch("siteconfig.SITECONFIG_PATH", path):
+                config = load_siteconfig()
+                self.assertEqual(config["clientUrl"], "https://example.test/lexonomy/")
+                self.assertEqual(config["apiUrl"], "/lexonomy/")
+                self.assertEqual(config["welcome"], 'He said "// and /* */".')
+
     def test_server_binding_and_public_url_are_independent(self):
         cases = [
             ({}, ("0.0.0.0", 8000, "/"), "http://localhost:8000/"),
@@ -119,6 +137,26 @@ class SiteConfigTests(unittest.TestCase):
                         config = load_siteconfig()
                         self.assertEqual(config["serverAddress"], server)
                         self.assertEqual(config["clientUrl"], client)
+                        self.assertEqual(config["apiUrl"], client)
+
+    def test_api_url_can_override_client_url(self):
+        client = "https://lexonomy.example.test/public/"
+        cases = [
+            ("", client),
+            ("/", "/"),
+            (" /preview/api ", "/preview/api/"),
+            ("https://api.example.test:8443/service", "https://api.example.test:8443/service/"),
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "siteconfig.json"
+            with patch("siteconfig.SITECONFIG_PATH", path):
+                for api_url, expected in cases:
+                    with self.subTest(api_url=api_url):
+                        path.write_text(json.dumps({"dataDir": "data", "clientUrl": client, "apiUrl": api_url}),
+                                        encoding="utf-8")
+                        config = load_siteconfig()
+                        self.assertEqual(config["clientUrl"], client)
+                        self.assertEqual(config["apiUrl"], expected)
 
     def test_config_precedence_with_source_and_container_defaults(self):
         with TemporaryDirectory() as directory, patch.dict(os.environ, clear=True):

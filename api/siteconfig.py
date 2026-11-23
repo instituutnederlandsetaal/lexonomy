@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 API_DIR = Path(__file__).resolve().parent
 DEFAULT_PORT = 8000
+_JSONC_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|(?P<comment>//[^\r\n]*|/\*[\s\S]*?\*/)')
 
 
 def find_siteconfig():
@@ -48,9 +49,16 @@ def parse_site_url(value, default_host):
     return url.scheme or "http", url.hostname or default_host, port, path
 
 
+def read_siteconfig(path):
+    # Match strings whole and replace comments with whitespace to preserve JSON error positions.
+    def replace_comment(match):
+        return re.sub(r"[^\r\n]", " ", match[0]) if match["comment"] else match[0]
+
+    return json.loads(_JSONC_TOKEN.sub(replace_comment, path.read_text(encoding="utf-8")))
+
+
 def load_siteconfig():
-    with SITECONFIG_PATH.open(encoding="utf-8") as config_file:
-        config = json.load(config_file)
+    config = read_siteconfig(SITECONFIG_PATH)
     config["dataDir"] = str((API_DIR / config["dataDir"]).resolve())
     # Older config files used separate route and port settings.
     server_url = config.get("serverUrl", config.get("rootPath", "/"))
@@ -71,4 +79,13 @@ def load_siteconfig():
     if port not in (None, 80):
         authority += f":{port}"
     config["clientUrl"] = f"{scheme}://{authority}{path}"
+
+    api_url = config.get("apiUrl", "").strip()
+    if api_url:
+        if not api_url.startswith("/") and "://" not in api_url:
+            raise ValueError("apiUrl must be an HTTP(S) URL or a path starting with '/'")
+        _, _, _, api_path = parse_site_url(api_url, "localhost")
+        config["apiUrl"] = urlsplit(api_url)._replace(path=api_path).geturl()
+    else:
+        config["apiUrl"] = config["clientUrl"]
     return config

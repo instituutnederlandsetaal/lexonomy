@@ -196,7 +196,7 @@ def home():
         html = (frontend_dist / "index.html").read_text(encoding="utf-8")
     except FileNotFoundError:
         return HTTPResponse("Run npm run build from frontend/, or open the Vite dev server.", status=503)
-    api_root = escape(siteconfig["clientUrl"], quote=True)
+    api_root = escape(siteconfig["apiUrl"], quote=True)
     html = html.replace("</head>", f'<meta name="lexonomy-api-root" content="{api_root}">\n</head>', 1)
     return HTTPResponse(html, headers={"Cache-Control": "no-cache"})
 

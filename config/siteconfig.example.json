@@ -1,7 +1,11 @@
 {
   "readonly": false,
+  // Address, port, and path that Lexonomy listens on.
   "serverUrl": "0.0.0.0:8000/",
+  // Public address used in generated links. Leave blank to derive it from serverUrl.
   "clientUrl": "",
+  // Browser API address. Use a path such as "/lexonomy/" for same-origin requests, or leave blank to use clientUrl.
+  "apiUrl": "",
   "dataDir": "../data/",
   "dbSchemaFile": "lexonomy.sqlite.schema",
   "dbXrefSchemaFile": "crossref.sqlite.schema",

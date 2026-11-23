@@ -1,6 +1,6 @@
 bottle==0.13.0
 lxml==6.0.0
-Paste==3.0.8
+Paste==3.11.0
 six==1.17.0
 Markdown==3.8.2
 pyicu==2.16.2

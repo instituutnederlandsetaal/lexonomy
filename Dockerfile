@@ -28,6 +28,8 @@ COPY api/dictTemplates/ ./dictTemplates/
 COPY api/resources/ ./resources/
 
 EXPOSE 8000
+# Bottle/Paste handle SIGINT as a request to stop the server cleanly.
+STOPSIGNAL SIGINT
 CMD ["sh", "-c", "python adminscripts/init.py && python adminscripts/updates.py && python migrate.py && exec python lexonomy.py"]
 
 FROM backend AS production
